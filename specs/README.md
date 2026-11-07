@@ -1,34 +1,41 @@
 # Specs
 
-Specs are grouped by area. Each folder holds the spec(s) for one area; `000-architecture.md` is the overall design.
+Specs are grouped by area. Each folder holds the spec(s) for one area, numbered from 001 within the folder; `000-architecture.md` is the overall design.
 
 Folders
 - `platform/`: CI, Cargo workspace, Docker Compose, Postgres bootstrap.
 - `common/`: reusable Rust library crates in `common/<name>/`, shared by services.
-- `accounts/`, `ledger/`: service spec (`service.md`) and Postgres DDL (`schema.md`).
+- `accounts/`, `ledger/`: service spec (`001-service.md`) and Postgres DDL (`002-schema.md`).
 - `gateway/`, `web/`, `seed/`: one spec each.
+
+## Changes
+- Specs are grouped by area folder.
+- Numbering restarts in each folder.
+- New common library specs: events-kafka, outbox, money-and-errors, auth-claims, telemetry.
+- Full DB schema specs for accounts and ledger.
+- Code layout is now `common/` crates plus `services/`.
 
 | Spec | Title | Depends on |
 |---|---|---|
 | [000-architecture](000-architecture.md) | Architecture | none |
-| [platform/ci](platform/ci.md) | CI | none |
-| [platform/workspace-and-compose](platform/workspace-and-compose.md) | Workspace and Compose | none |
-| [common/money-and-errors](common/money-and-errors.md) | Money and errors crates | platform/workspace-and-compose |
-| [common/auth-claims](common/auth-claims.md) | Auth claims crate | common/money-and-errors |
-| [common/telemetry](common/telemetry.md) | Telemetry crate | platform/workspace-and-compose |
-| [common/events-kafka](common/events-kafka.md) | Events (Kafka) crate | common/money-and-errors, common/telemetry |
-| [common/outbox](common/outbox.md) | Outbox crate | common/events-kafka |
-| [accounts/schema](accounts/schema.md) | Accounts DB schema | platform/workspace-and-compose |
-| [accounts/service](accounts/service.md) | Accounts service | accounts/schema, common/* |
-| [ledger/schema](ledger/schema.md) | Ledger DB schema | platform/workspace-and-compose |
-| [ledger/service](ledger/service.md) | Ledger service | ledger/schema, common/* |
-| [gateway/service](gateway/service.md) | Gateway | accounts/service, ledger/service |
-| [web/service](web/service.md) | Web UI | gateway/service |
-| [seed/seed](seed/seed.md) | Seed | gateway/service |
+| [platform/001-ci](platform/001-ci.md) | CI | none |
+| [platform/002-workspace-and-compose](platform/002-workspace-and-compose.md) | Workspace and Compose | none |
+| [common/001-money-and-errors](common/001-money-and-errors.md) | Money and errors crates | platform/002-workspace-and-compose |
+| [common/002-auth-claims](common/002-auth-claims.md) | Auth claims crate | common/001-money-and-errors |
+| [common/003-telemetry](common/003-telemetry.md) | Telemetry crate | platform/002-workspace-and-compose |
+| [common/004-events-kafka](common/004-events-kafka.md) | Events (Kafka) crate | common/001-money-and-errors, common/003-telemetry |
+| [common/005-outbox](common/005-outbox.md) | Outbox crate | common/004-events-kafka |
+| [accounts/001-service](accounts/001-service.md) | Accounts service | accounts/002-schema, common/* |
+| [accounts/002-schema](accounts/002-schema.md) | Accounts DB schema | platform/002-workspace-and-compose |
+| [ledger/001-service](ledger/001-service.md) | Ledger service | ledger/002-schema, common/* |
+| [ledger/002-schema](ledger/002-schema.md) | Ledger DB schema | platform/002-workspace-and-compose |
+| [gateway/001-service](gateway/001-service.md) | Gateway | accounts/001-service, ledger/001-service |
+| [web/001-service](web/001-service.md) | Web UI | gateway/001-service |
+| [seed/001-seed](seed/001-seed.md) | Seed | gateway/001-service |
 
 ## Build order
-1. `platform/ci` and `platform/workspace-and-compose` first.
-2. `common/*` libraries (money-and-errors, auth-claims, telemetry, then events-kafka, then outbox).
-3. `accounts/*` and `ledger/*` in parallel (schema first, then service).
-4. `gateway/service`.
-5. `web/service` and `seed/seed` in parallel.
+1. `platform/001-ci` and `platform/002-workspace-and-compose` first.
+2. `common/*` libraries (001-money-and-errors, 002-auth-claims, 003-telemetry, then 004-events-kafka, then 005-outbox).
+3. `accounts/*` and `ledger/*` in parallel (002-schema first, then 001-service).
+4. `gateway/001-service`.
+5. `web/001-service` and `seed/001-seed` in parallel.

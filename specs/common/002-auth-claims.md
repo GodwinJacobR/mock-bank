@@ -23,7 +23,7 @@ Library crate `common/auth` (`bank-auth`): the internal signed JWT the gateway s
 - Errors map to `AppError::unauthorized` / `forbidden` from `common/errors`.
 
 ## Dependencies
-- `common/money-and-errors`.
+- `common/001-money-and-errors`.
 
 ## Acceptance criteria
 - [ ] Token signed in one crate verifies in another.

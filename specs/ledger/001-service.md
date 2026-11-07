@@ -6,11 +6,11 @@ Status: draft
 Source of truth for money: double-entry transfers, balances, idempotency, treasury accounts, and a projection of accounts built from Kafka.
 
 ## Scope (in)
-- Uses schema `ledger` (DDL, grants, invariants, treasury rows in `ledger/schema`).
+- Uses schema `ledger` (DDL, grants, invariants, treasury rows in `ledger/002-schema`).
 - Transfer creation with double-entry postings and overdraft rejection.
-- `account_projection` consumer for `accounts.events.v1`, built on the `common/events-kafka` consumer runner (dedup, retry, DLQ are the crate's job).
+- `account_projection` consumer for `accounts.events.v1`, built on the `common/004-events-kafka` consumer runner (dedup, retry, DLQ are the crate's job).
 - Treasury accounts (`bank:treasury:<CUR>`, created by migration), admin-only origination.
-- Publishes `ledger.transfers.v1` via `common/outbox` (enqueue in the transfer transaction, relay from the crate).
+- Publishes `ledger.transfers.v1` via `common/005-outbox` (enqueue in the transfer transaction, relay from the crate).
 
 ## Out of scope
 - FX / cross-currency transfers, Redis cache.
@@ -36,11 +36,11 @@ Source of truth for money: double-entry transfers, balances, idempotency, treasu
 6. Commit, return 201.
 
 **Events**
-- Consumes `accounts.events.v1` with the `common/events-kafka` runner (group `ledger-projection`; handler runs in the runner's transaction, so `processed_events` dedup and offset commit are the crate's job): `AccountOpened` upserts projection and balance row (0); `AccountClosed` sets status.
+- Consumes `accounts.events.v1` with the `common/004-events-kafka` runner (group `ledger-projection`; handler runs in the runner's transaction, so `processed_events` dedup and offset commit are the crate's job): `AccountOpened` upserts projection and balance row (0); `AccountClosed` sets status.
 - Publishes `TransferPosted` via `outbox::enqueue` to `ledger.transfers.v1`, key = source `account_id`, payload `{transfer_id, from_account, to_account, amount_minor, currency, memo, posted_at}`.
 
 ## Dependencies
-- `ledger/schema`, `common/money-and-errors`, `common/auth-claims`, `common/telemetry`, `common/events-kafka`, `common/outbox`. `accounts/service` for the events it consumes (can be tested with fabricated events).
+- `ledger/002-schema`, `common/001-money-and-errors`, `common/002-auth-claims`, `common/003-telemetry`, `common/004-events-kafka`, `common/005-outbox`. `accounts/001-service` for the events it consumes (can be tested with fabricated events).
 
 ## Acceptance criteria
 - [ ] Every transfer has two entries summing to zero; an audit query over all transfers returns zero violations.

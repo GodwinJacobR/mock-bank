@@ -38,7 +38,7 @@ Two small library crates, `common/money` (`bank-money`) and `common/errors` (`ba
 - Gateway passes service errors through unchanged by decoding the same body into `AppError`.
 
 ## Dependencies
-- `platform/workspace-and-compose`.
+- `platform/002-workspace-and-compose`.
 
 ## Acceptance criteria
 - [ ] Money serde round-trips; invalid currency code is rejected.

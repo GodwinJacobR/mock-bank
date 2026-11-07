@@ -12,7 +12,7 @@ Library crate `common/outbox` (`bank-outbox`): transactional outbox so a service
 - Metrics hooks.
 
 ## Out of scope
-- Consuming events (`common/events-kafka`).
+- Consuming events (`common/004-events-kafka`).
 - CDC / Debezium.
 - Deleting old published rows beyond an optional cleanup helper.
 
@@ -63,7 +63,7 @@ Multiple relay instances are safe: `SKIP LOCKED` partitions the work (ordering a
 - A relay killed while holding row locks releases them when its connection drops.
 
 ## Dependencies
-- `common/events-kafka`.
+- `common/004-events-kafka`.
 
 ## Acceptance criteria
 - [ ] `enqueue` inside a rolled-back transaction leaves no outbox row.

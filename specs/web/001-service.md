@@ -34,7 +34,7 @@ Server-rendered browser UI (htmx + askama) for the customer: login, accounts, tr
 - Askama templates in `services/web/templates/` with a base layout.
 
 ## Dependencies
-- `gateway/service`, `platform/workspace-and-compose`
+- `gateway/001-service`, `platform/002-workspace-and-compose`
 
 ## Acceptance criteria
 - [ ] Seed user can log in and sees accounts with balances.

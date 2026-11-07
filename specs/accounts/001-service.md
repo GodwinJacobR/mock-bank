@@ -6,11 +6,11 @@ Status: draft
 Own customers, accounts, payees and login sessions; publish account events. Knows no balances.
 
 ## Scope (in)
-- Uses schema `accounts` (DDL, grants, migrations in `accounts/schema`).
-- Publishes via `common/outbox`; JWT via `common/auth`; errors via `common/errors`; logging/health via `common/telemetry`.
+- Uses schema `accounts` (DDL, grants, migrations in `accounts/002-schema`).
+- Publishes via `common/005-outbox`; JWT via `common/auth`; errors via `common/errors`; logging/health via `common/003-telemetry`.
 - Account number generation.
 - Argon2 login, Postgres-backed sessions (phase 1).
-- Authorization: a customer only accesses own data, enforced here from `X-Customer-Id` (signed internal JWT, `common/auth-claims`).
+- Authorization: a customer only accesses own data, enforced here from `X-Customer-Id` (signed internal JWT, `common/002-auth-claims`).
 
 ## Out of scope
 - Balances, transfers (ledger).
@@ -33,13 +33,13 @@ Own customers, accounts, payees and login sessions; publish account events. Know
 - `POST /payees` `{name, account_number}` -> `201 {id, name, account_number}`
 - `GET /payees` -> `200 [...]`; `DELETE /payees/{id}` -> `204`
 
-**Events** (topic `accounts.events.v1`, key `account_id`, envelope from `common/events-kafka`)
+**Events** (topic `accounts.events.v1`, key `account_id`, envelope from `common/004-events-kafka`)
 - `AccountOpened` payload `{account_id, customer_id, account_number, currency}`
 - `AccountClosed` payload `{account_id}`
-- Each change calls `outbox::enqueue(tx, ...)` inside the same transaction as the account change; the service runs `outbox::run_relay` (see `common/outbox`). No relay logic is defined here.
+- Each change calls `outbox::enqueue(tx, ...)` inside the same transaction as the account change; the service runs `outbox::run_relay` (see `common/005-outbox`). No relay logic is defined here.
 
 ## Dependencies
-- `accounts/schema`, `common/money-and-errors`, `common/auth-claims`, `common/telemetry`, `common/events-kafka`, `common/outbox`
+- `accounts/002-schema`, `common/001-money-and-errors`, `common/002-auth-claims`, `common/003-telemetry`, `common/004-events-kafka`, `common/005-outbox`
 
 ## Acceptance criteria
 - [ ] Creating a customer stores an argon2 hash, never plaintext.

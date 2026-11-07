@@ -11,7 +11,7 @@ Full Postgres DDL, grants and invariant enforcement for schema `ledger`.
 - Migration naming.
 
 ## Out of scope
-- Customers, payees, sessions (`accounts/schema`).
+- Customers, payees, sessions (`accounts/002-schema`).
 - FX and cross-currency.
 
 ## Design
@@ -156,7 +156,7 @@ CREATE TABLE processed_events (                  -- used by common/events consum
   PRIMARY KEY (event_id, consumer)
 );
 
--- standard outbox from common/outbox
+-- standard outbox from common/005-outbox
 CREATE TABLE outbox (
   id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   topic        text        NOT NULL,
@@ -249,7 +249,7 @@ GRANT SELECT ON audit_zero_sum_violations, audit_balance_mismatches   TO ledger_
 ```
 
 ## Dependencies
-- `platform/workspace-and-compose` (roles), `common/outbox` (outbox DDL), `common/events-kafka` (`processed_events` shape).
+- `platform/002-workspace-and-compose` (roles), `common/005-outbox` (outbox DDL), `common/004-events-kafka` (`processed_events` shape).
 
 ## Acceptance criteria
 - [ ] Migrations apply on an empty database as `ledger_owner`; treasury rows exist for each configured currency.

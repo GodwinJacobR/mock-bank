@@ -30,7 +30,7 @@ Populate a running bank with repeatable dummy data through the public API only.
 **Determinism**: every random choice comes from the seeded RNG, in a fixed order; transfer `i` is always the same parameters, so a replay hits the ledger's idempotency and creates nothing.
 
 ## Dependencies
-- `gateway/service` (needs the full stack); `web/service` not required.
+- `gateway/001-service` (needs the full stack); `web/001-service` not required.
 
 ## Acceptance criteria
 - [ ] `docker compose run seed` creates the requested customers, accounts and funded balances.

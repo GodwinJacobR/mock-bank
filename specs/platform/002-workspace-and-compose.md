@@ -13,9 +13,9 @@ A Cargo workspace with `common/` libraries and `services/` binaries, and a `dock
 - Migrations layout and bootstrap of roles/schemas.
 
 ## Out of scope
-- Library crate behaviour: see `common/money-and-errors`, `common/events-kafka`, `common/outbox`, `common/auth-claims`, `common/telemetry`.
+- Library crate behaviour: see `common/001-money-and-errors`, `common/004-events-kafka`, `common/005-outbox`, `common/002-auth-claims`, `common/003-telemetry`.
 - Redis, assistant, mcp-server, observability stack, kafka-ui, Qdrant.
-- Service business logic (`accounts/*`, `ledger/*`, `gateway/service`, `web/service`, `seed/seed`).
+- Service business logic (`accounts/*`, `ledger/*`, `gateway/001-service`, `web/001-service`, `seed/001-seed`).
 
 ## Design
 **Layout**
@@ -30,14 +30,14 @@ deploy/postgres/init.sql
 
 **Postgres bootstrap** (`deploy/postgres/init.sql`, run on first start)
 - One database `bank`; schemas `accounts`, `ledger`.
-- Per schema two roles: `<svc>_owner` (owns the schema and its objects; used only to run migrations) and `<svc>_svc` (runtime role, limited grants defined in `accounts/schema` and `ledger/schema`). Passwords from env.
+- Per schema two roles: `<svc>_owner` (owns the schema and its objects; used only to run migrations) and `<svc>_svc` (runtime role, limited grants defined in `accounts/002-schema` and `ledger/002-schema`). Passwords from env.
 - Neither `_svc` role has any privilege on the other schema.
 
 **Migrations**
 - Naming: `migrations/<service>/NNNN_description.sql` (4-digit, zero-padded, increasing, e.g. `migrations/ledger/0001_init.sql`).
 - Each service runs `sqlx::migrate!("../../migrations/<service>")` on startup connecting as `<svc>_owner`, then opens its runtime pool as `<svc>_svc`.
 
-**Health**: every service uses the `common/telemetry` health helper (`/healthz`, `/readyz`).
+**Health**: every service uses the `common/003-telemetry` health helper (`/healthz`, `/readyz`).
 
 **Compose**
 - Build paths: `services/<name>` (e.g. `build: { context: ., args: { SERVICE: ledger } }`).
@@ -45,7 +45,7 @@ deploy/postgres/init.sql
 - `.env.example` keys: DB passwords per role, `JWT_SECRET`, `ADMIN_TOKEN`, `KAFKA_BROKERS`, `RUST_LOG`.
 
 ## Dependencies
-- None (`platform/ci` recommended first).
+- None (`platform/001-ci` recommended first).
 
 ## Acceptance criteria
 - [ ] `cargo build --workspace` succeeds with all `common/*` and `services/*` members.

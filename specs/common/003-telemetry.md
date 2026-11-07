@@ -12,7 +12,7 @@ Library crate `common/telemetry` (`bank-telemetry`): one-call logging setup, a m
 
 ## Out of scope
 - OTLP export, collector, Tempo, Grafana (phase 5; the crate leaves a hook for `tracing-opentelemetry`).
-- Business metrics definitions (owned by each crate/service, e.g. outbox lag in `common/outbox`).
+- Business metrics definitions (owned by each crate/service, e.g. outbox lag in `common/005-outbox`).
 
 ## Design
 - `init_tracing(service_name)`: `tracing-subscriber` with JSON formatter, `RUST_LOG` env filter (default `info`), `service` field on every line. Idempotent (second call is a no-op).
@@ -21,7 +21,7 @@ Library crate `common/telemetry` (`bank-telemetry`): one-call logging setup, a m
 - Trace context: `traceparent` extraction/injection helpers for HTTP (axum layer) and a plain `HeaderMap` form that `common/events` uses for Kafka headers.
 
 ## Dependencies
-- `platform/workspace-and-compose`.
+- `platform/002-workspace-and-compose`.
 
 ## Acceptance criteria
 - [ ] Log lines are single-line JSON with `timestamp`, `level`, `service`, `target`, `message`.

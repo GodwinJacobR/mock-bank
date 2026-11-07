@@ -11,7 +11,7 @@ Full Postgres DDL, grants and migration conventions for schema `accounts`.
 - Migration naming.
 
 ## Out of scope
-- Balances and ledger data (`ledger/schema`).
+- Balances and ledger data (`ledger/002-schema`).
 - Redis sessions (phase 2; `sessions` table is replaced then).
 
 ## Design
@@ -113,7 +113,7 @@ CREATE TABLE sessions (
 CREATE INDEX sessions_customer_idx ON sessions (customer_id);
 CREATE INDEX sessions_expires_idx  ON sessions (expires_at);
 
--- standard outbox from common/outbox
+-- standard outbox from common/005-outbox
 CREATE TABLE outbox (
   id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   topic        text        NOT NULL,
@@ -129,7 +129,7 @@ CREATE INDEX outbox_unpublished_idx ON outbox (created_at) WHERE published_at IS
 Notes
 - Accounts are never deleted; closing sets `status='closed'` and `closed_at`. Only `open` to `closed` is allowed (enforced in the service).
 - Expired sessions are treated as missing on read and removed by a periodic `DELETE ... WHERE expires_at < now()`.
-- No treasury or system accounts exist here; they exist only in `ledger` (see `ledger/schema`).
+- No treasury or system accounts exist here; they exist only in `ledger` (see `ledger/002-schema`).
 - Payee `account_number` is not a foreign key: it may refer to an account of another customer, and no cross-customer lookup is exposed.
 
 **Grants** (`0002_grants.sql`)
@@ -144,7 +144,7 @@ GRANT SELECT, INSERT, UPDATE         ON outbox    TO accounts_svc;   -- relay ma
 ```
 
 ## Dependencies
-- `platform/workspace-and-compose` (roles and schema bootstrap), `common/outbox` (outbox DDL).
+- `platform/002-workspace-and-compose` (roles and schema bootstrap), `common/005-outbox` (outbox DDL).
 
 ## Acceptance criteria
 - [ ] Migrations apply cleanly on an empty database as `accounts_owner`.

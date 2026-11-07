@@ -40,7 +40,7 @@ The single public REST API. Authenticates users, routes to accounts and ledger, 
 **Errors**: same `{error, message}` shape as `common/errors`. Missing/invalid session -> `401`.
 
 ## Dependencies
-- `accounts/service`, `ledger/service`, `common/money-and-errors`, `common/auth-claims`, `common/telemetry`
+- `accounts/001-service`, `ledger/001-service`, `common/001-money-and-errors`, `common/002-auth-claims`, `common/003-telemetry`
 
 ## Acceptance criteria
 - [ ] Login sets an HttpOnly cookie; wrong password gives 401.

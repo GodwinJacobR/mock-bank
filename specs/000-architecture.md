@@ -57,7 +57,7 @@ Rules
 ## 4. Data stores
 
 Postgres (one instance, one database, one schema per service, one DB role per schema)
-- Migrations via `sqlx migrate`, kept per service as `migrations/<service>/NNNN_description.sql`. Full DDL: `accounts/schema`, `ledger/schema`.
+- Migrations via `sqlx migrate`, kept per service as `migrations/<service>/NNNN_description.sql`. Full DDL: `accounts/002-schema`, `ledger/002-schema`.
 - Ledger invariants enforced in DB: `sum(entries.amount) = 0` per transfer (checked in transaction and by a periodic audit query), entries are append-only (no UPDATE/DELETE grants).
 
 Vector store
@@ -81,7 +81,7 @@ Single broker (KRaft mode, no ZooKeeper) locally. Retention for `accounts.events
 | `assistant.audit.v1` | assistant | none initially (log sink) | `conversation_id` | Agent tool calls and approvals |
 | `*.dlq.v1` | consumers | manual | original key | Poison messages |
 
-Event envelope (defined in `common/events-kafka`; plain JSON, versioned by topic name and `schema_version` field; no Avro/Protobuf/schema registry):
+Event envelope (defined in `common/004-events-kafka`; plain JSON, versioned by topic name and `schema_version` field; no Avro/Protobuf/schema registry):
 ```json
 { "event_id": "uuid", "type": "TransferPosted", "occurred_at": "RFC3339",
   "schema_version": 1, "aggregate_id": "transfer uuid", "payload": { } }
@@ -89,12 +89,12 @@ Event envelope (defined in `common/events-kafka`; plain JSON, versioned by topic
 `TransferPosted` payload: `transfer_id, from_account, to_account, amount_minor, currency, memo, posted_at`.
 
 Delivery semantics
-- Producers: at-least-once, `acks=all`, idempotent producer enabled (`common/events-kafka`).
+- Producers: at-least-once, `acks=all`, idempotent producer enabled (`common/004-events-kafka`).
 - Consumers: at-least-once with manual offset commit after processing; handlers are idempotent via `event_id` dedup table.
 - Ordering: guaranteed per partition key (per account). No global ordering.
 - 3 partitions per topic locally.
 
-Outbox pattern (ledger and accounts; implemented once in `common/outbox`, schema in `accounts/schema` and `ledger/schema`)
+Outbox pattern (ledger and accounts; implemented once in `common/005-outbox`, schema in `accounts/002-schema` and `ledger/002-schema`)
 1. In the same Postgres transaction as the transfer, insert a row into `ledger.outbox` (`id, topic, key, payload, created_at, published_at`).
 2. A relay task in the service polls unpublished rows (`FOR UPDATE SKIP LOCKED`), publishes to Kafka, then sets `published_at`.
 3. Crash between publish and mark causes a duplicate, which consumers tolerate via `event_id`.
@@ -228,7 +228,7 @@ mock-bank/
 
 ## 12. Phases
 
-Platform task (before phase 1 features, `platform/ci`): CI via GitHub Actions running `cargo fmt --check`, `clippy` and tests (testcontainers) on every PR.
+Platform task (before phase 1 features, `platform/001-ci`): CI via GitHub Actions running `cargo fmt --check`, `clippy` and tests (testcontainers) on every PR.
 
 Phase 1: core bank and events (specs: platform, common, accounts, ledger, gateway, web, seed)
 - Services: accounts, ledger, gateway, web UI, Postgres, Kafka, outbox relays, `accounts.events.v1`, `ledger.transfers.v1`, seed script.

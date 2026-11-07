@@ -3,7 +3,7 @@
 Status: draft
 
 ## Goal
-Library crate `common/events` (`bank-events`): one reusable way to publish and consume Kafka events, used by every service (directly by consumers, and by `common/outbox` for publishing).
+Library crate `common/events` (`bank-events`): one reusable way to publish and consume Kafka events, used by every service (directly by consumers, and by `common/005-outbox` for publishing).
 
 ## Scope (in)
 - Event envelope type and typed topic names.
@@ -12,7 +12,7 @@ Library crate `common/events` (`bank-events`): one reusable way to publish and c
 - Trace context propagation in Kafka headers.
 
 ## Out of scope
-- The outbox table and relay (`common/outbox`).
+- The outbox table and relay (`common/005-outbox`).
 - Avro/Protobuf and schema registry (plain JSON only).
 - Topic creation policy beyond a dev helper (Compose creates topics: 3 partitions, `accounts.events.v1` infinite retention).
 - Log compaction.
@@ -43,7 +43,7 @@ impl<T> Topic<T> { pub fn dlq(&self) -> String /* "<topic>.dlq.v1" derived from 
 
 **Publisher**
 - Settings: `acks=all`, `enable.idempotence=true`, `max.in.flight.requests.per.connection=5`, `compression.type=lz4`, bounded `message.timeout.ms`.
-- Adds headers: `traceparent` (from the current span via `common/telemetry`), `event_id`, `content-type: application/json`.
+- Adds headers: `traceparent` (from the current span via `common/003-telemetry`), `event_id`, `content-type: application/json`.
 - Key is mandatory; per-key ordering relies on it.
 ```rust
 #[async_trait]
@@ -76,7 +76,7 @@ Per message:
 4. Handler error: roll back, retry with exponential backoff and jitter up to `max_retries` (partition is paused in place to preserve per-key order). After exhaustion publish the original bytes plus headers `dlq-reason`, `dlq-attempts`, `dlq-source-topic/partition/offset` to the DLQ topic, then commit the offset.
 5. Metrics via `metrics`: `events_consumed_total`, `events_dlq_total`, `events_duplicate_total`, `consumer_lag`.
 
-**`processed_events` table** (provided by each consuming service in its schema, see `ledger/schema`):
+**`processed_events` table** (provided by each consuming service in its schema, see `ledger/002-schema`):
 `processed_events(event_id uuid, consumer text, processed_at timestamptz, primary key (event_id, consumer))`. The crate takes the schema-qualified table name via config.
 
 **Graceful shutdown**: on cancel, stop polling, finish the in-flight message (handler + both commits), close the consumer (leave group), return. Hard deadline configurable (default 30 s).
@@ -84,7 +84,7 @@ Per message:
 **Replay from earliest**: `StartFrom::Earliest` (CLI/env flag `REPLAY_FROM_EARLIEST=true`) uses a fresh group id suffix or seeks to beginning on assignment, ignoring committed offsets. The service is responsible for truncating its projection and `processed_events` rows for that consumer first (documented helper `reset_consumer(pool, consumer)`).
 
 ## Dependencies
-- `common/money-and-errors`, `common/telemetry`.
+- `common/001-money-and-errors`, `common/003-telemetry`.
 
 ## Acceptance criteria
 - [ ] Publisher uses `acks=all` and idempotence (asserted from config in a unit test).
