@@ -1,4 +1,4 @@
-# 001d Ledger Service
+# Ledger Service
 
 Status: draft
 
@@ -6,27 +6,18 @@ Status: draft
 Source of truth for money: double-entry transfers, balances, idempotency, treasury accounts, and a projection of accounts built from Kafka.
 
 ## Scope (in)
-- Tables in schema `ledger`: `transfers`, `entries`, `balances`, `idempotency_keys`, `account_projection`, `outbox`, plus `processed_events`.
+- Uses schema `ledger` (DDL, grants, invariants, treasury rows in `ledger/schema`).
 - Transfer creation with double-entry postings and overdraft rejection.
-- `account_projection` consumer for `accounts.events.v1`, dedup by `event_id`.
-- Treasury accounts (`bank:treasury` per currency), admin-only origination.
-- Outbox relay publishing `ledger.transfers.v1`.
+- `account_projection` consumer for `accounts.events.v1`, built on the `common/events-kafka` consumer runner (dedup, retry, DLQ are the crate's job).
+- Treasury accounts (`bank:treasury:<CUR>`, created by migration), admin-only origination.
+- Publishes `ledger.transfers.v1` via `common/outbox` (enqueue in the transfer transaction, relay from the crate).
 
 ## Out of scope
-- FX / cross-currency transfers, Redis cache, DLQ (phase 2).
+- FX / cross-currency transfers, Redis cache.
 - Customers, payees, account numbers (accounts service).
 - Calling other services over HTTP.
 
 ## Design
-**Tables**
-- `account_projection(account_id pk, customer_id, account_number unique, currency, status, updated_at)`
-- `balances(account_id pk, currency, balance_minor bigint, updated_at)`; row created when an account is projected.
-- `transfers(id uuid pk, from_account, to_account, amount_minor bigint > 0, currency, memo, status, created_at)`
-- `entries(id, transfer_id fk, account_id, amount_minor bigint)` signed: debit negative, credit positive. Append-only: the `ledger_svc` role has no UPDATE/DELETE on it.
-- `idempotency_keys(key, customer_id, request_hash, response jsonb, status_code, created_at, pk(key, customer_id))`
-- `processed_events(event_id pk, processed_at)`
-- `outbox(id, topic, key, payload jsonb, created_at, published_at null)`
-- Treasury: system rows with `account_number` `bank:treasury:<CUR>`, `customer_id` null, flag `is_treasury`.
 
 **Endpoints** (internal; JWT with `X-Customer-Id`)
 - `POST /transfers` header `Idempotency-Key` (required), body `{from_account_id, to_account_number, amount_minor, currency, memo}` -> `201 {id, from_account, to_account, amount_minor, currency, memo, created_at}`
@@ -41,15 +32,15 @@ Source of truth for money: double-entry transfers, balances, idempotency, treasu
 2. Idempotency lookup: same key + same request hash -> return stored response; same key + different body -> `422 idempotency_conflict`.
 3. Lock both `balances` rows in account-id order.
 4. If source is not treasury and balance < amount -> `422 insufficient_funds`.
-5. Insert transfer, two entries (sum 0), update balances, store idempotency record and response, insert outbox row.
+5. Insert transfer, two entries (sum 0), update balances, store idempotency record and response, `outbox::enqueue`.
 6. Commit, return 201.
 
 **Events**
-- Consumes `accounts.events.v1` (manual commit after processing, group `ledger-projection`): `AccountOpened` upserts projection and balance row (0); `AccountClosed` sets status. Skip if `event_id` in `processed_events`.
-- Publishes `TransferPosted` to `ledger.transfers.v1`, key = source `account_id`, payload `{transfer_id, from_account, to_account, amount_minor, currency, memo, posted_at}`.
+- Consumes `accounts.events.v1` with the `common/events-kafka` runner (group `ledger-projection`; handler runs in the runner's transaction, so `processed_events` dedup and offset commit are the crate's job): `AccountOpened` upserts projection and balance row (0); `AccountClosed` sets status.
+- Publishes `TransferPosted` via `outbox::enqueue` to `ledger.transfers.v1`, key = source `account_id`, payload `{transfer_id, from_account, to_account, amount_minor, currency, memo, posted_at}`.
 
 ## Dependencies
-- 001b; 001c for the events it consumes (can be tested with fabricated events).
+- `ledger/schema`, `common/money-and-errors`, `common/auth-claims`, `common/telemetry`, `common/events-kafka`, `common/outbox`. `accounts/service` for the events it consumes (can be tested with fabricated events).
 
 ## Acceptance criteria
 - [ ] Every transfer has two entries summing to zero; an audit query over all transfers returns zero violations.

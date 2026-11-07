@@ -57,7 +57,7 @@ Rules
 ## 4. Data stores
 
 Postgres (one instance, one database, one schema per service, one DB role per schema)
-- Migrations via `sqlx migrate`, kept per service.
+- Migrations via `sqlx migrate`, kept per service as `migrations/<service>/NNNN_description.sql`. Full DDL: `accounts/schema`, `ledger/schema`.
 - Ledger invariants enforced in DB: `sum(entries.amount) = 0` per transfer (checked in transaction and by a periodic audit query), entries are append-only (no UPDATE/DELETE grants).
 
 Vector store
@@ -81,7 +81,7 @@ Single broker (KRaft mode, no ZooKeeper) locally. Retention for `accounts.events
 | `assistant.audit.v1` | assistant | none initially (log sink) | `conversation_id` | Agent tool calls and approvals |
 | `*.dlq.v1` | consumers | manual | original key | Poison messages |
 
-Event envelope (plain JSON, versioned by topic name and `schema_version` field; no Avro/Protobuf/schema registry):
+Event envelope (defined in `common/events-kafka`; plain JSON, versioned by topic name and `schema_version` field; no Avro/Protobuf/schema registry):
 ```json
 { "event_id": "uuid", "type": "TransferPosted", "occurred_at": "RFC3339",
   "schema_version": 1, "aggregate_id": "transfer uuid", "payload": { } }
@@ -89,12 +89,12 @@ Event envelope (plain JSON, versioned by topic name and `schema_version` field; 
 `TransferPosted` payload: `transfer_id, from_account, to_account, amount_minor, currency, memo, posted_at`.
 
 Delivery semantics
-- Producers: at-least-once, `acks=all`, idempotent producer enabled.
+- Producers: at-least-once, `acks=all`, idempotent producer enabled (`common/events-kafka`).
 - Consumers: at-least-once with manual offset commit after processing; handlers are idempotent via `event_id` dedup table.
 - Ordering: guaranteed per partition key (per account). No global ordering.
 - 3 partitions per topic locally.
 
-Outbox pattern (ledger, same for accounts)
+Outbox pattern (ledger and accounts; implemented once in `common/outbox`, schema in `accounts/schema` and `ledger/schema`)
 1. In the same Postgres transaction as the transfer, insert a row into `ledger.outbox` (`id, topic, key, payload, created_at, published_at`).
 2. A relay task in the service polls unpublished rows (`FOR UPDATE SKIP LOCKED`), publishes to Kafka, then sets `published_at`.
 3. Crash between publish and mark causes a duplicate, which consumers tolerate via `event_id`.
@@ -130,7 +130,7 @@ Agent tool call with human approval
 4. User clicks approve; assistant executes the tool via gateway with a fresh idempotency key stored on the approval row. Reject marks it rejected. Result goes back to the model. All steps are published to `assistant.audit.v1`.
 
 Seed dummy data
-- `cargo run -p seed` (or `docker compose run seed`) calls the public API (not SQL) to create N customers, accounts, and M random transfers with a fixed RNG seed for repeatability. Uses the faker crate. Each Idempotency-Key is derived deterministically from `seed + index`, so re-runs create no duplicates. Accounts are funded via treasury transfers through the public API using the admin token.
+- `cargo run -p seed` (crate `services/seed`) (or `docker compose run seed`) calls the public API (not SQL) to create N customers, accounts, and M random transfers with a fixed RNG seed for repeatability. Uses the faker crate. Each Idempotency-Key is derived deterministically from `seed + index`, so re-runs create no duplicates. Accounts are funded via treasury transfers through the public API using the admin token.
 - Flags: `--customers`, `--accounts-per-customer`, `--transfers`, `--seed`.
 
 ## 7. AI design
@@ -180,18 +180,18 @@ Prompt-injection notes
 
 | Container | Image / build | Host port | Volume |
 |---|---|---|---|
-| web (htmx + askama) | build `crates/web` | 8080 | none |
-| gateway | build `crates/gateway` | 3000 | none |
-| accounts | build `crates/accounts` | internal 3001 | none |
-| ledger | build `crates/ledger` | internal 3002 | none |
-| assistant | build `crates/assistant` | internal 3003 | none |
-| mcp-server | build `crates/mcp-server` | 3100 | none |
+| web (htmx + askama) | build `services/web` | 8080 | none |
+| gateway | build `services/gateway` | 3000 | none |
+| accounts | build `services/accounts` | internal 3001 | none |
+| ledger | build `services/ledger` | internal 3002 | none |
+| assistant | build `services/assistant` | internal 3003 | none |
+| mcp-server | build `services/mcp-server` | 3100 | none |
 | postgres | `pgvector/pgvector:pg16` | 5432 | `pgdata` |
 | redis | `redis:7` | 6379 | `redisdata` |
 | kafka | `apache/kafka` (KRaft) | 9092 | `kafkadata` |
 | kafka-ui (optional) | `provectuslabs/kafka-ui` | 8081 | none |
 | qdrant (optional, phase 3) | `qdrant/qdrant` | 6333 | `qdrantdata` |
-| seed | build `crates/seed`, profile `tools` | none | none |
+| seed | build `services/seed`, profile `tools` | none | none |
 | prometheus, grafana, otel-collector (phase 5) | official images | 9090, 3030, 4317 | `grafanadata` |
 
 - Compose profiles: default (phase 1 set, includes Kafka), `ai`, `observability`, `tools`.
@@ -202,19 +202,25 @@ Prompt-injection notes
 
 ```
 mock-bank/
-  Cargo.toml              # workspace
-  crates/
-    common/               # money type, errors, event envelope, auth claims, tracing setup
+  Cargo.toml              # workspace, members: common/*, services/*
+  common/                 # one Rust library crate each
+    money/                # Money, Currency
+    errors/               # AppError, HTTP mapping
+    events/               # Kafka envelope, Publisher, Consumer runner
+    outbox/               # outbox enqueue and relay
+    auth/                 # internal JWT claims
+    telemetry/            # tracing, metrics, health helpers
+  services/
     accounts/
     ledger/
     gateway/
-    assistant/
-    mcp-server/
     web/                  # htmx + askama templates
     seed/
-  migrations/             # per-service subfolders
+    assistant/            # phase 3
+    mcp-server/           # phase 4
+  migrations/             # migrations/<service>/NNNN_description.sql
   deploy/                 # compose files, grafana, prometheus, otel config
-  specs/                  # one spec per feature, 000 is this file
+  specs/                  # grouped by area: platform, common, accounts, ledger, gateway, web, seed
   knowledge/              # repo knowledge (OKF)
   docker-compose.yml
   .env.example
@@ -222,9 +228,9 @@ mock-bank/
 
 ## 12. Phases
 
-Task 001a (before phase 1 features): CI via GitHub Actions running `cargo fmt --check`, `clippy` and tests (testcontainers) on every PR.
+Platform task (before phase 1 features, `platform/ci`): CI via GitHub Actions running `cargo fmt --check`, `clippy` and tests (testcontainers) on every PR.
 
-Phase 1: core bank and events (task 001)
+Phase 1: core bank and events (specs: platform, common, accounts, ledger, gateway, web, seed)
 - Services: accounts, ledger, gateway, web UI, Postgres, Kafka, outbox relays, `accounts.events.v1`, `ledger.transfers.v1`, seed script.
 - Acceptance:
   - `docker compose up` starts everything (including Kafka); migrations run automatically.

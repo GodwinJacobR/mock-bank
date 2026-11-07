@@ -1,4 +1,4 @@
-# 001g Seed
+# Seed
 
 Status: draft
 
@@ -6,7 +6,7 @@ Status: draft
 Populate a running bank with repeatable dummy data through the public API only.
 
 ## Scope (in)
-- Crate `crates/seed`, runnable as `cargo run -p seed` or `docker compose run seed` (profile `tools`).
+- Crate `services/seed`, runnable as `cargo run -p seed` or `docker compose run seed` (profile `tools`).
 - Creates customers, accounts, payees (optional), treasury funding, and random transfers.
 - Fixed RNG seed; deterministic `Idempotency-Key`s; safe to re-run.
 
@@ -30,7 +30,7 @@ Populate a running bank with repeatable dummy data through the public API only.
 **Determinism**: every random choice comes from the seeded RNG, in a fixed order; transfer `i` is always the same parameters, so a replay hits the ledger's idempotency and creates nothing.
 
 ## Dependencies
-- 001e (needs the full stack); 001f not required.
+- `gateway/service` (needs the full stack); `web/service` not required.
 
 ## Acceptance criteria
 - [ ] `docker compose run seed` creates the requested customers, accounts and funded balances.

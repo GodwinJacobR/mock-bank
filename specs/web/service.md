@@ -1,4 +1,4 @@
-# 001f Web UI
+# Web UI
 
 Status: draft
 
@@ -6,7 +6,7 @@ Status: draft
 Server-rendered browser UI (htmx + askama) for the customer: login, accounts, transactions, transfers, payees.
 
 ## Scope (in)
-- Crate `crates/web` (axum + askama), port 8080.
+- Crate `services/web` (axum + askama), port 8080.
 - Pages: login, accounts and balances, transaction list, transfer form, payees.
 - htmx for partial updates (transfer submit, payee add/remove, transaction list paging).
 - Calls the gateway only; forwards the user's session cookie.
@@ -31,10 +31,10 @@ Server-rendered browser UI (htmx + askama) for the customer: login, accounts, tr
 - A resubmitted form (double click, refresh, retry) reuses the same hidden key, so no duplicate transfer. A fresh key is generated after a successful result.
 - Errors from the gateway (`insufficient_funds`, `account_not_ready`, etc.) shown as friendly messages; `account_not_ready` tells the user to retry.
 - Unauthenticated (gateway 401) redirects to `/login`.
-- Askama templates in `crates/web/templates/` with a base layout.
+- Askama templates in `services/web/templates/` with a base layout.
 
 ## Dependencies
-- 001b, 001e
+- `gateway/service`, `platform/workspace-and-compose`
 
 ## Acceptance criteria
 - [ ] Seed user can log in and sees accounts with balances.

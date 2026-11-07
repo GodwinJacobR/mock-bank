@@ -1,4 +1,4 @@
-# 001e Gateway
+# Gateway
 
 Status: draft
 
@@ -37,10 +37,10 @@ The single public REST API. Authenticates users, routes to accounts and ledger, 
 
 **Composition**: gateway calls accounts then ledger. If ledger fails, return `502`; do not return partial balances.
 
-**Errors**: same `{error, message}` shape as `common`. Missing/invalid session -> `401`.
+**Errors**: same `{error, message}` shape as `common/errors`. Missing/invalid session -> `401`.
 
 ## Dependencies
-- 001b, 001c, 001d
+- `accounts/service`, `ledger/service`, `common/money-and-errors`, `common/auth-claims`, `common/telemetry`
 
 ## Acceptance criteria
 - [ ] Login sets an HttpOnly cookie; wrong password gives 401.
