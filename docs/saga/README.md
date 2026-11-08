@@ -38,20 +38,20 @@ Other saga types would reuse the runner with a different step list (illustration
 
 ```mermaid
 flowchart TD
-  A[consume command, offset not committed] --> B["BEGIN; SELECT sagas row FOR UPDATE"]
+  A[consume command, offset not committed] --> B["BEGIN, SELECT sagas row FOR UPDATE"]
   B --> C{final status?}
-  C -- yes --> H[COMMIT; commit Kafka offset]
+  C -- yes --> H[COMMIT, then commit Kafka offset]
   C -- no --> D{failure_reason set?}
   D -- no --> E[pick next forward step]
   D -- yes --> U[pick next undo step, reverse order]
   E --> S["run idempotent step (key saga_id-step)"]
   U --> S
   S --> F{result}
-  F -- ok --> G["update sagas row + business tables + outbox; COMMIT"]
+  F -- ok --> G["update sagas row + business tables + outbox, COMMIT"]
   G --> B
   F -- transient --> R{attempts left?}
   R -- yes --> W[backoff with jitter, same key] --> S
-  R -- "no (forward step) / permanent" --> P["set failure_reason; COMMIT"]
+  R -- "no (forward step) / permanent" --> P["set failure_reason, COMMIT"]
   P --> B
 ```
 
@@ -99,13 +99,13 @@ sequenceDiagram
   K->>W1: redelivered
   W1->>S: run step again (same key)
   S-->>W1: stored response (replay, no second effect)
-  W1->>DB: UPDATE current_step; COMMIT
+  W1->>DB: UPDATE current_step, COMMIT
   Note over W1: crash point 3: after the save, before the offset commit
   W1-xW1: crash
   K->>W2: redelivered
   W2->>DB: SELECT FOR UPDATE, row is ahead
   W2->>S: next step
-  W2->>DB: UPDATE; COMMIT
+  W2->>DB: UPDATE, COMMIT
   W2->>K: commit offset (last)
   Note over SW,DB: command lost? sweeper finds IN_PROGRESS rows with stale updated_at and re-enqueues via outbox
 ```
