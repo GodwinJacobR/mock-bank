@@ -82,7 +82,7 @@ sequenceDiagram
   T->>A: GET /accounts/{from} (projected balance, advisory)
   A-->>T: balance_minor, as_of
   T-->>GW: 422 insufficient_funds + as_of if balance < amount (no rows written)
-  T->>DB: BEGIN; insert transfer PENDING + outbox (command, transfer.created); COMMIT
+  T->>DB: BEGIN, insert transfer PENDING + outbox (command, transfer.created), COMMIT
   T-->>GW: 202 {transfer_id}
   GW-->>UI: 202 {transfer_id}
   UI->>GW: GET /transfers/{id}/events (SSE) or poll GET /transfers/{id}
@@ -96,7 +96,7 @@ sequenceDiagram
   L-->>W: ok (or rejected -> undo, key id-debit-undo -> REVERSED)
   W->>DB: CREDITED, then DONE + outbox transfer.completed
   T->>K: relay publishes transfer.* on transfers.events.v1
-  T-->>UI: SSE final state; UI replaces "processing"
+  T-->>UI: SSE final state, UI replaces "processing"
 ```
 
 The balance check at admission is advisory and fail-open; a stale projection can false-pass (transfer ends `FAILED` at the ledger debit) or false-reject right after a credit (retry succeeds once the projection catches up). The client does not get instant success or failure: `202` only means accepted. The UI shows "processing" until a final state (`DONE`, `FAILED`, `REVERSED`).
