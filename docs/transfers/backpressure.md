@@ -2,7 +2,7 @@
 
 When transfers are busy, the system slows callers down instead of falling over. Transfers are accepted into a bounded queue; the ledger is protected behind it.
 
-Legend: **[Spec]** in specs. **[Proposal]** not yet specced. The core of this page is now Spec ([transfers/001-service](../specs/transfers/001-service.md)).
+Legend: **[Spec]** in specs. **[Proposal]** not yet specced. The core of this page is now Spec ([transfers/001-service](../../specs/transfers/001-service.md)).
 
 ```mermaid
 flowchart LR
@@ -31,7 +31,7 @@ flowchart LR
 - [Spec] Kafka (`transfers.commands.v1`) is the buffer between accepting and processing. Workers drain at the ledger's pace; a slow ledger grows lag, which trips admission, so the ledger is never flooded.
 - [Spec] Idempotency: client `Idempotency-Key` stored on the transfer row; same key + same body returns the same `transfer_id`; different body is `422`.
 - [Spec] R4 (platform/003): timeouts on every network call, bounded pools and queues, overload returns 503/429 with `Retry-After`; small DB pools plus PgBouncer or RDS Proxy.
-- [Spec] The saga retries transient ledger errors (including `409 account_not_ready`) with the same step key, 5 attempts, then fails or reverses.
+- [Spec] The saga runner (see [saga](../saga/README.md)) retries transient ledger errors (including `409 account_not_ready`) with the same step key, 5 attempts, then fails or reverses.
 - [Spec] Metrics: backlog, consumer lag, step latency, time-to-final, admission rejections, plus pool wait, RED, outbox lag. The p99 < 200 ms SLO applies to accepting (`POST /transfers`), not to time-to-final.
 - [Spec] Trade-off: the client gets `202`, not the result. It polls `GET /transfers/{id}` or uses SSE `GET /transfers/{id}/events`; the UI shows "processing".
 

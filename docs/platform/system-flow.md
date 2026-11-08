@@ -1,6 +1,6 @@
 # System flow
 
-Source: [specs/000-architecture.md](../specs/000-architecture.md), [specs/transfers/001-service.md](../specs/transfers/001-service.md). Transfers are a separate **transfers** service. The **ledger** only does double-entry postings and balances.
+Source: [specs/000-architecture.md](../../specs/000-architecture.md), [specs/transfers/001-service.md](../../specs/transfers/001-service.md). Transfers are a separate **transfers** service. The **ledger** only does double-entry postings and balances.
 
 ## Components
 
@@ -72,14 +72,13 @@ stateDiagram-v2
   PENDING --> DEBITED: ledger debit ok
   DEBITED --> CREDITED: ledger credit ok
   CREDITED --> DONE: finalize
-  DEBITED --> DEBITED: credit rejected (failure_reason set)
-  DEBITED --> REVERSED: debit undone
+  DEBITED --> REVERSED: credit rejected, debit undone
   DONE --> [*]
   FAILED --> [*]
   REVERSED --> [*]
 ```
 
-The state is saved in `transfers.transfers`, so a crashed worker resumes from the saved state. There is no internal reversing state: a worker that resumes and finds `DEBITED` (or `CREDITED`) with `failure_reason` set runs the undo steps in reverse. See [saga-worker-pattern.md](saga-worker-pattern.md).
+The progress is saved in the `sagas` row (mirrored in `transfers.status`), so a crashed worker resumes from the saved state. There is no internal reversing state: while the saga's `failure_reason` is set the runner runs the undo steps in reverse. See [../saga/README.md](../saga/README.md).
 
 ## Account page
 

@@ -11,7 +11,8 @@ Folders
 ## Changes
 - Specs are grouped by area folder.
 - Numbering restarts in each folder.
-- New common library specs: events-kafka, outbox, money-and-errors, auth-claims, telemetry.
+- New common library specs: events-kafka, outbox, saga, money-and-errors, auth-claims, telemetry.
+- Saga is a generic runner (`common/006-saga`); transfers is its first saga type.
 - Full DB schema specs for accounts and ledger.
 - Code layout is now `common/` crates plus `services/`.
 - New `transfers/` service (async saga, Kafka-buffered). Ledger is postings only (`ledger.postings.v1`); `transfer.*` events come from transfers.
@@ -27,11 +28,12 @@ Folders
 | [common/003-telemetry](common/003-telemetry.md) | Telemetry crate | platform/002-workspace-and-compose |
 | [common/004-events-kafka](common/004-events-kafka.md) | Events (Kafka) crate | common/001-money-and-errors, common/003-telemetry |
 | [common/005-outbox](common/005-outbox.md) | Outbox crate | common/004-events-kafka |
+| [common/006-saga](common/006-saga.md) | Saga runner crate | common/004-events-kafka, common/005-outbox |
 | [accounts/001-service](accounts/001-service.md) | Accounts service | accounts/002-schema, common/* |
 | [accounts/002-schema](accounts/002-schema.md) | Accounts DB schema | platform/002-workspace-and-compose |
 | [ledger/001-service](ledger/001-service.md) | Ledger service | ledger/002-schema, common/* |
 | [ledger/002-schema](ledger/002-schema.md) | Ledger DB schema | platform/002-workspace-and-compose |
-| [transfers/001-service](transfers/001-service.md) | Transfers service | transfers/002-schema, accounts/001-service, ledger/001-service, common/* |
+| [transfers/001-service](transfers/001-service.md) | Transfers service | transfers/002-schema, common/006-saga, accounts/001-service, ledger/001-service, common/* |
 | [transfers/002-schema](transfers/002-schema.md) | Transfers DB schema | platform/002-workspace-and-compose |
 | [gateway/001-service](gateway/001-service.md) | Gateway | accounts/001-service, ledger/001-service, transfers/001-service |
 | [gateway/002-admin](gateway/002-admin.md) | Gateway admin API | gateway/001-service |
@@ -40,7 +42,7 @@ Folders
 
 ## Build order
 1. `platform/001-ci` and `platform/002-workspace-and-compose` first.
-2. `common/*` libraries (001-money-and-errors, 002-auth-claims, 003-telemetry, then 004-events-kafka, then 005-outbox).
+2. `common/*` libraries (001-money-and-errors, 002-auth-claims, 003-telemetry, then 004-events-kafka, then 005-outbox, then 006-saga).
 3. `accounts/*` and `ledger/*` in parallel (002-schema first, then 001-service), then `transfers/*` (002-schema first, then 001-service).
 4. `gateway/001-service`.
 5. `web/001-service` and `gateway/002-admin` in parallel, then `web/002-admin`.

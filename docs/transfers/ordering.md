@@ -2,7 +2,7 @@
 
 When a set of instructions must run one after another.
 
-Legend: **[Spec]** in specs. **[Proposal]** not yet specced. The single-transfer saga and per-account ordering are now Spec ([transfers/001-service](../specs/transfers/001-service.md)).
+Legend: **[Spec]** in specs. **[Proposal]** not yet specced. The single-transfer saga and per-account ordering are now Spec ([transfers/001-service](../../specs/transfers/001-service.md)).
 
 ```mermaid
 flowchart TD
@@ -17,7 +17,7 @@ flowchart TD
 
 ## What the specs say
 
-- [Spec] A transfer is a saga in the transfers service: pre-check, ledger debit, ledger credit, with a compensating reversal posting if the credit is rejected. State `PENDING -> DEBITED -> CREDITED -> DONE | FAILED | REVERSED` is persisted per transfer, so a crash resumes from the saved state (transfers/001, transfers/002).
+- [Spec] A transfer is a saga in the transfers service: pre-check, ledger debit, ledger credit, with a compensating reversal posting if the credit is rejected. Saga `transfer` (steps debit, credit, done; runner in [saga](../saga/README.md)) state `PENDING -> DEBITED -> CREDITED -> DONE | FAILED | REVERSED` is persisted per transfer, so a crash resumes from the saved state (transfers/001, transfers/002).
 - [Spec] Each ledger call has an idempotency key: `{transfer_id}-{step}` forward and `{transfer_id}-{step}-undo` for compensation. A repeated call is a replay.
 - [Spec] Compensation is a new reversing posting (`{transfer_id}-debit-undo`), never a delete: ledger entries are append-only (ledger/002).
 - [Spec] Per-account ordering: commands go to `transfers.commands.v1` keyed by source account id. Same account = same partition = processed one at a time, in order. Different accounts run in parallel. The offset is committed after the saga reaches a final state.
@@ -38,7 +38,7 @@ sequenceDiagram
   W->>DB: DEBITED
   W->>L: credit transit to destination (key id-credit)
   L-->>W: rejected (account_closed)
-  W->>DB: DEBITED + failure_reason (credit rejected)
+  W->>DB: failure_reason set on the sagas row (credit rejected)
   W->>L: undo debit (key id-debit-undo)
   L-->>W: ok
   W->>DB: REVERSED + transfer.reversed

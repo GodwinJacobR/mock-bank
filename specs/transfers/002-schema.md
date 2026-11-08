@@ -6,7 +6,7 @@ Status: draft
 Postgres DDL, grants and constraints for schema `transfers`.
 
 ## Scope (in)
-- Tables: `transfers`, `outbox`.
+- Tables: `transfers`, `sagas` (standard DDL from `common/006-saga`), `outbox`.
 - Constraints, indexes, grants per DB role, allowed status transitions.
 - Migration naming.
 
@@ -36,8 +36,16 @@ erDiagram
     text status
     text failure_code
     text failure_message
-    int attempts
     timestamptz created_at
+    timestamptz updated_at
+  }
+  sagas {
+    uuid saga_id PK "= transfers.id"
+    text type
+    text current_step
+    text status
+    text failure_reason
+    jsonb payload
     timestamptz updated_at
   }
   outbox {
@@ -48,7 +56,7 @@ erDiagram
     timestamptz published_at
   }
 ```
-`(customer_id, idempotency_key)` is unique. `from_account` and `to_account` are ids from the accounts service with no foreign key (other schema); `to_account` is set by the pre-check. `outbox` is standalone.
+`(customer_id, idempotency_key)` is unique. `from_account` and `to_account` are ids from the accounts service with no foreign key (other schema); `to_account` is set by the pre-check. `sagas.saga_id` equals `transfers.id` (inserted in the same transaction). `sagas` holds progress and `failure_reason`; `transfers` holds business fields and a mirror `status`. `outbox` is standalone.
 
 **DDL** (`0001_init.sql`)
 ```sql
@@ -67,11 +75,9 @@ CREATE TABLE transfers (
   amount_minor      bigint      NOT NULL,
   currency          char(3)     NOT NULL,
   memo              text        NOT NULL DEFAULT '',
-  status            text        NOT NULL DEFAULT 'PENDING',
+  status            text        NOT NULL DEFAULT 'PENDING',     -- mirror of the saga, set by the step hook
   failure_code      text,
   failure_message   text,
-  failure_reason    text,                           -- set when a forward step fails; with DEBITED/CREDITED it means: run the undo steps
-  attempts          integer     NOT NULL DEFAULT 0,
   created_at        timestamptz NOT NULL DEFAULT now(),
   updated_at        timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT transfers_idem_uk UNIQUE (customer_id, idempotency_key),
@@ -88,6 +94,19 @@ CREATE INDEX transfers_customer_inflight_idx ON transfers (customer_id)
   WHERE status IN ('PENDING','DEBITED','CREDITED');   -- per-customer limit
 CREATE INDEX transfers_from_idx ON transfers (from_account, created_at DESC, id DESC);
 CREATE INDEX transfers_to_idx   ON transfers (to_account,   created_at DESC, id DESC) WHERE status = 'DONE';
+
+-- standard saga state table from common/006-saga; saga_id = transfers.id
+CREATE TABLE sagas (
+  saga_id        uuid        PRIMARY KEY,
+  type           text        NOT NULL,
+  current_step   text        NOT NULL,
+  status         text        NOT NULL DEFAULT 'IN_PROGRESS',
+  failure_reason text,
+  payload        jsonb       NOT NULL,
+  updated_at     timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT sagas_status_chk CHECK (status IN ('IN_PROGRESS','DONE','FAILED','REVERSED'))
+);
+CREATE INDEX sagas_active_idx ON sagas (updated_at) WHERE status = 'IN_PROGRESS';
 
 -- standard outbox from common/005-outbox
 CREATE TABLE outbox (
@@ -106,7 +125,7 @@ CREATE INDEX outbox_unpublished_idx ON outbox (created_at) WHERE published_at IS
 **Allowed transitions** (trigger in `0001_init.sql`, also checked by the service)
 ```
 PENDING   -> DEBITED | FAILED
-DEBITED   -> CREDITED | REVERSED   (REVERSED only after failure_reason is set and the undo is done)
+DEBITED   -> CREDITED | REVERSED   (REVERSED only after the saga's failure_reason is set and the undo is done)
 CREDITED  -> DONE
 DONE, FAILED, REVERSED: final, rows are immutable
 ```
@@ -127,24 +146,25 @@ END $$;
 CREATE TRIGGER transfers_transition BEFORE UPDATE ON transfers
   FOR EACH ROW EXECUTE FUNCTION check_transfer_transition();
 ```
-Updates that keep the status (retry counter) are allowed until the row is final.
+Updates that keep the status are allowed until the row is final. Saga progress (`current_step`, `failure_reason`) lives in `sagas`; its rules are owned by the runner (`common/006-saga`).
 
 **Grants** (`0002_grants.sql`)
 ```sql
 REVOKE ALL ON SCHEMA transfers FROM PUBLIC;
 GRANT USAGE ON SCHEMA transfers TO transfers_svc;
-GRANT SELECT, INSERT, UPDATE ON transfers, outbox TO transfers_svc;
+GRANT SELECT, INSERT, UPDATE ON transfers, sagas, outbox TO transfers_svc;
 -- no DELETE/TRUNCATE; no DDL; no access to schemas accounts or ledger
 ```
 
 ## Dependencies
-- `platform/002-workspace-and-compose` (roles), `common/005-outbox` (outbox DDL).
+- `platform/002-workspace-and-compose` (roles), `common/005-outbox` (outbox DDL), `common/006-saga` (sagas DDL).
 
 ## Acceptance criteria
 - [ ] Migrations apply on an empty database as `transfers_owner`.
 - [ ] A duplicate `(customer_id, idempotency_key)` insert is rejected.
 - [ ] An invalid status value or a transition outside the allowed list (e.g. `PENDING -> DONE`, `FAILED -> DEBITED`) is rejected; a final row cannot be updated.
 - [ ] `FAILED`/`REVERSED` rows without `failure_code` are rejected.
+- [ ] A `sagas` row with a status outside `IN_PROGRESS|DONE|FAILED|REVERSED` is rejected.
 - [ ] `transfers_svc` cannot DELETE/TRUNCATE, run DDL, or access schemas `accounts` or `ledger`.
 
 ## Test plan
