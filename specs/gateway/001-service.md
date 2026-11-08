@@ -6,12 +6,12 @@ Status: draft
 The single public REST API. Authenticates users, routes to accounts and ledger, and composes account pages.
 
 ## Scope (in)
-- Public REST endpoints for web UI and seed.
+- Public REST endpoints for the web UI.
 - Session cookie auth (HttpOnly) backed by accounts' `sessions` table.
 - Internal signed JWT (with customer id and role) on every call to accounts/ledger; `X-Customer-Id` header carries the customer id.
 - Account page composition: accounts list + ledger balances.
 - `Idempotency-Key` passthrough.
-- Admin token auth for seed operations.
+- Admin token auth for admin operations (see `gateway/002-admin`).
 
 ## Out of scope
 - Redis sessions, rate limiting, idempotency fast path, balance cache (phase 2).
@@ -32,7 +32,7 @@ The single public REST API. Authenticates users, routes to accounts and ledger, 
 - `GET /accounts/{id}/transfers?limit=&before=` -> passthrough to ledger
 - `POST /transfers` header `Idempotency-Key` (required, else 400), body `{from_account_id, to_account_number, amount_minor, currency, memo}` -> ledger response; status codes and error codes passed through unchanged (incl. `409 account_not_ready`).
 - `GET|POST /payees`, `DELETE /payees/{id}` -> accounts passthrough
-- Admin only (`X-Admin-Token`): `POST /admin/customers`, `POST /admin/accounts` (with `customer_id`), `POST /admin/fund` `{to_account_number, amount_minor, currency}` -> ledger transfer from treasury (Idempotency-Key required).
+- Admin only (`X-Admin-Token`): `/admin/*` routes, specified in `gateway/002-admin`.
 - `GET /healthz`, `GET /readyz`.
 
 **Composition**: gateway calls accounts then ledger. If ledger fails, return `502`; do not return partial balances.

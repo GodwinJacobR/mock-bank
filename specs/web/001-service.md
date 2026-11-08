@@ -37,7 +37,7 @@ Server-rendered browser UI (htmx + askama) for the customer: login, accounts, tr
 - `gateway/001-service`, `platform/002-workspace-and-compose`
 
 ## Acceptance criteria
-- [ ] Seed user can log in and sees accounts with balances.
+- [ ] A customer can log in and sees accounts with balances.
 - [ ] Transaction list for an account shows transfers and pages with "load more".
 - [ ] A transfer from the UI updates both balances.
 - [ ] Submitting the same form twice (same hidden key) creates one transfer.
@@ -49,4 +49,4 @@ Server-rendered browser UI (htmx + askama) for the customer: login, accounts, tr
 ## Test plan
 - Unit tests for amount parsing and formatting, template rendering.
 - Integration tests with a stubbed gateway for each route, including idempotency key reuse and error rendering.
-- Manual e2e through `docker compose up` with seeded data.
+- Manual e2e through `docker compose up` with customers created via the admin console (`web/002-admin`).

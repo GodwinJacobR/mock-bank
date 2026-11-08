@@ -27,7 +27,8 @@ Own customers, accounts, payees and login sessions; publish account events. Know
 - `GET /sessions/{id}` -> `200 {customer_id}` or `404` if missing/expired
 - `DELETE /sessions/{id}` -> `204`
 - `POST /accounts` `{currency}` -> `201 {id, account_number, currency, status}` (owner from JWT; admin may pass `customer_id`)
-- `GET /accounts` -> `200 [{id, account_number, currency, status}]`
+- `GET /accounts` -> `200 [{id, account_number, currency, status}]` (admin: all accounts with `customer_id`; optional `customer_id` filter)
+- `GET /customers` (admin) -> `200 [{id, email, name}]`
 - `GET /accounts/{id}` -> `200` or `404` (other customer's account is `404`)
 - `PATCH /accounts/{id}` `{status: "closed"}` -> `200`
 - `POST /payees` `{name, account_number}` -> `201 {id, name, account_number}`
@@ -46,6 +47,7 @@ Own customers, accounts, payees and login sessions; publish account events. Know
 - [ ] Login with correct password returns a session; wrong password returns 401.
 - [ ] Expired session returns 404.
 - [ ] Opening an account yields a unique valid 12-digit number and one outbox row.
+- [ ] Admin can list all customers and accounts; customer role cannot.
 - [ ] Closing an account emits `AccountClosed`.
 - [ ] Customer A cannot read or modify customer B's accounts or payees.
 - [ ] Adding the same payee account number twice for a customer is a 409.

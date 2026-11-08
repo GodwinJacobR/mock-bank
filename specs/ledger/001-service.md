@@ -21,7 +21,7 @@ Source of truth for money: double-entry transfers, balances, idempotency, treasu
 
 **Endpoints** (internal; JWT with `X-Customer-Id`)
 - `POST /transfers` header `Idempotency-Key` (required), body `{from_account_id, to_account_number, amount_minor, currency, memo}` -> `201 {id, from_account, to_account, amount_minor, currency, memo, created_at}`
-  - Caller must own the source account (else 404). Treasury source requires admin role (else 403), enforced here.
+  - Customer role must own the source account (else 404). Admin role may transfer from any account. Treasury source requires admin role (else 403), enforced here.
 - `GET /accounts/{id}/balance` -> `200 {account_id, balance_minor, currency}` (owner only)
 - `POST /balances/query` `{account_ids: [...]}` -> `200 [{account_id, balance_minor, currency}]` (owner only; used by gateway to compose pages)
 - `GET /accounts/{id}/transfers?limit=&before=` -> `200 [{id, direction, counterparty, amount_minor, currency, memo, created_at}]`
@@ -46,6 +46,7 @@ Source of truth for money: double-entry transfers, balances, idempotency, treasu
 - [ ] Every transfer has two entries summing to zero; an audit query over all transfers returns zero violations.
 - [ ] Balances equal the sum of entries per account.
 - [ ] Overdraft returns 422 `insufficient_funds`; treasury may go negative.
+- [ ] Admin role can transfer from any account; customer role cannot (404).
 - [ ] Non-admin cannot originate from treasury (403) even if gateway is bypassed.
 - [ ] Unknown destination or source returns 409 `account_not_ready`; after the event is consumed, retry with the same key succeeds.
 - [ ] Cross-currency transfer is rejected.

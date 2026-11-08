@@ -113,7 +113,7 @@ Account page
 - Gateway calls accounts for the account list and ledger for balances, then composes the page. Redis balance cache (phase 2) sits in front of the ledger call.
 
 System accounts
-- `bank:treasury` (one per currency) funds new accounts via ordinary transfers. It is the only account allowed to go negative; the zero-sum invariant still holds. Invisible to customers. Only a service/admin credential (the seed's admin token) can originate transfers from it, enforced in the ledger, not only the gateway.
+- `bank:treasury` (one per currency) funds new accounts via ordinary transfers. It is the only account allowed to go negative; the zero-sum invariant still holds. Invisible to customers. Only a service/admin credential (the admin token) can originate transfers from it, enforced in the ledger, not only the gateway.
 
 Payees
 - Each customer has a saved payees list (`accounts.payees`). No cross-customer lookup by name or email. The agent resolves names like "Alice" only from the user's own payees.
@@ -129,9 +129,9 @@ Agent tool call with human approval
 3. For a write tool (`create_transfer`) the assistant does not execute. It stores a pending row in `approvals` with the exact arguments and returns an approval request to the UI.
 4. User clicks approve; assistant executes the tool via gateway with a fresh idempotency key stored on the approval row. Reject marks it rejected. Result goes back to the model. All steps are published to `assistant.audit.v1`.
 
-Seed dummy data
-- `cargo run -p seed` (crate `services/seed`) (or `docker compose run seed`) calls the public API (not SQL) to create N customers, accounts, and M random transfers with a fixed RNG seed for repeatability. Uses the faker crate. Each Idempotency-Key is derived deterministically from `seed + index`, so re-runs create no duplicates. Accounts are funded via treasury transfers through the public API using the admin token.
-- Flags: `--customers`, `--accounts-per-customer`, `--transfers`, `--seed`.
+Admin console (no seed data)
+- Services, migrations and `common/*` contain no mock data and no random data generation. The only data created by migrations is the `bank:treasury` system-account rows.
+- Data is created through the web `/admin` console (gateway `/admin/*`, `X-Admin-Token`): add customers and accounts, fund from treasury, and submit bulk transfers (pasted CSV/JSON or a random generator). Randomness lives only in the gateway/web admin layer, never in accounts or ledger. Bulk items use deterministic keys `{batch}-{index}`, so resubmitting a batch creates no duplicates.
 
 ## 7. AI design
 
@@ -166,7 +166,7 @@ Prompt-injection notes
 - Gateway passes `X-Customer-Id` (signed internal JWT) to internal services. Internal services are not published on host ports except for debugging.
 - Authorization: a customer can only access their own accounts; enforced in each service, not only the gateway.
 - MCP: bearer token (a session token or a personal access token created in the UI).
-- Seed users share a known dev password, printed by the seed script.
+- Admin console uses a single `ADMIN_TOKEN` (no separate admin login). Web holds the token server-side; the browser never sees it.
 
 ## 9. Observability
 
@@ -191,7 +191,6 @@ Prompt-injection notes
 | kafka | `apache/kafka` (KRaft) | 9092 | `kafkadata` |
 | kafka-ui (optional) | `provectuslabs/kafka-ui` | 8081 | none |
 | qdrant (optional, phase 3) | `qdrant/qdrant` | 6333 | `qdrantdata` |
-| seed | build `services/seed`, profile `tools` | none | none |
 | prometheus, grafana, otel-collector (phase 5) | official images | 9090, 3030, 4317 | `grafanadata` |
 
 - Compose profiles: default (phase 1 set, includes Kafka), `ai`, `observability`, `tools`.
@@ -215,12 +214,11 @@ mock-bank/
     ledger/
     gateway/
     web/                  # htmx + askama templates
-    seed/
     assistant/            # phase 3
     mcp-server/           # phase 4
   migrations/             # migrations/<service>/NNNN_description.sql
   deploy/                 # compose files, grafana, prometheus, otel config
-  specs/                  # grouped by area: platform, common, accounts, ledger, gateway, web, seed
+  specs/                  # grouped by area: platform, common, accounts, ledger, gateway, web
   knowledge/              # repo knowledge (OKF)
   docker-compose.yml
   .env.example
@@ -230,12 +228,12 @@ mock-bank/
 
 Platform task (before phase 1 features, `platform/001-ci`): CI via GitHub Actions running `cargo fmt --check`, `clippy` and tests (testcontainers) on every PR.
 
-Phase 1: core bank and events (specs: platform, common, accounts, ledger, gateway, web, seed)
-- Services: accounts, ledger, gateway, web UI, Postgres, Kafka, outbox relays, `accounts.events.v1`, `ledger.transfers.v1`, seed script.
+Phase 1: core bank and events (specs: platform, common, accounts, ledger, gateway, web)
+- Services: accounts, ledger, gateway, web UI, Postgres, Kafka, outbox relays, `accounts.events.v1`, `ledger.transfers.v1`, admin console.
 - Acceptance:
   - `docker compose up` starts everything (including Kafka); migrations run automatically.
-  - `docker compose run seed` creates customers, accounts, treasury-funded balances and transfers; re-running creates no duplicates.
-  - Logging in as a seed user shows accounts, balances and transaction list in the UI.
+  - Via the `/admin` console, creating customers and accounts, funding from treasury and bulk transfers works; resubmitting a bulk batch creates no duplicates.
+  - Logging in as a customer created in the console shows accounts, balances and transaction list in the UI.
   - A transfer made in the UI updates both balances; retrying with the same idempotency key does not duplicate it.
   - Overdraft is rejected (except treasury). DB-level check shows all transfers sum to zero.
   - Ledger rejects transfers for unknown accounts with `409 account_not_ready`, and rejects cross-currency transfers.
@@ -254,7 +252,7 @@ Phase 2: Redis and hardening (task 002)
 Phase 3: RAG and vector DB (task 003)
 - Assistant service, embedding pipeline, pgvector, chat UI.
 - Acceptance:
-  - Newly seeded transfers become searchable within 10 s.
+  - Newly posted transfers become searchable within 10 s.
   - "How much did I spend on groceries last month?" style questions return an answer citing transaction ids.
   - A user never gets another user's data in answers (test).
   - Qdrant swap (optional) works by config with the same tests.
@@ -287,7 +285,7 @@ Phase 5: load tests and observability (task 005)
 - Single currency per account; cross-currency transfers rejected; no FX.
 - `bank:treasury` per currency funds accounts, may go negative, admin-only, enforced in the ledger.
 - Transfers target a generated account number; per-customer payees; no cross-customer lookup.
-- Seed Idempotency-Keys derived from `seed + index`; funding via treasury transfers through the public API.
+- No seed script or mock data in services; data entered via the admin console. Bulk transfer keys are `{batch}-{index}`; funding via treasury transfers through the gateway admin API.
 - Claude model choice for RAG vs agent deferred to phase 3.
 
 Deferred / v2

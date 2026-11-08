@@ -15,7 +15,7 @@ Full Postgres DDL, grants and invariant enforcement for schema `ledger`.
 - FX and cross-currency.
 
 ## Design
-**Migrations**: `migrations/ledger/NNNN_description.sql` (4-digit zero-padded, increasing; never edited after merge). Phase 1: `0001_init.sql` (tables), `0002_invariants.sql` (triggers), `0003_treasury.sql` (seed treasury rows), `0004_grants.sql`. Run by `ledger_owner` at service start.
+**Migrations**: `migrations/ledger/NNNN_description.sql` (4-digit zero-padded, increasing; never edited after merge). Phase 1: `0001_init.sql` (tables), `0002_invariants.sql` (triggers), `0003_system_accounts.sql` (treasury system-account rows), `0004_grants.sql`. Run by `ledger_owner` at service start.
 
 **Roles**: `ledger_owner` owns the schema and objects (migrations only). `ledger_svc` is the runtime role.
 
@@ -223,7 +223,7 @@ CREATE VIEW audit_balance_mismatches AS
 ```
 Both must return zero rows.
 
-**Treasury accounts** (`0003_treasury.sql`): inserted by migration, not by events.
+**Treasury accounts** (`0003_system_accounts.sql`): inserted by migration, not by events.
 ```sql
 INSERT INTO account_projection (account_id, customer_id, account_number, currency, is_treasury)
 SELECT gen_random_uuid(), NULL, 'bank:treasury:' || c, c, true FROM unnest(ARRAY['USD','EUR','GBP']) AS c
