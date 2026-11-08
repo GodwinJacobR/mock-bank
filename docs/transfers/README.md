@@ -6,7 +6,7 @@
 Customer-facing transfer workflow. Accepts a transfer fast (`202`), queues it on Kafka, runs the `transfer` saga (`debit`, `credit`, `done`) against accounts (pre-check) and ledger (postings), publishes results.
 
 ## API (internal, called by gateway)
-- `POST /transfers` (`Idempotency-Key`) -> `202`; `429`/`503` + `Retry-After` under load.
+- `POST /transfers` (`Idempotency-Key`) -> `202`; `429`/`503` + `Retry-After` under load; `422 insufficient_funds` (with `as_of`) when the accounts balance projection already shows too little. That check is advisory and fail-open, writes no `transfers`/`sagas` row, and leaves the authoritative check to the ledger debit. A stale projection can false-pass (ends `FAILED` at the debit) or false-reject right after a credit.
 - `GET /transfers/{id}`, SSE `GET /transfers/{id}/events`.
 - `GET /accounts/{id}/transfers`.
 
@@ -23,6 +23,7 @@ Schema `transfers`: `transfers` (business fields, mirror `status`), `sagas` (pro
 flowchart LR
   GW[gateway] -- "POST /transfers, GET, SSE" --> API[transfers API]
   API --> PG[("Postgres: schema transfers")]
+  API -- "admission: GET /accounts/{id} (projected balance, advisory)" --> ACC[accounts]
   API -- "outbox relay" --> K{{Kafka}}
   K -- "transfers.commands.v1" --> W["workers (saga runner)"]
   W --> PG

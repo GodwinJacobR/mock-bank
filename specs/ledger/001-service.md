@@ -25,7 +25,7 @@ Source of truth for money: double-entry postings, balances, idempotency, treasur
   - Caller role must be `service` (the transfers workers), else 403. Accounts are given by id; there is no account-number lookup here.
   - `initiator_role` (`customer` | `admin`) is the role of the original requester, copied by the transfers service. A treasury source requires `initiator_role = admin` (else 403), enforced here, not only in gateway or transfers.
 - `GET /accounts/{id}/balance` -> `200 {account_id, balance_minor, currency}` (owner only)
-- `POST /balances/query` `{account_ids: [...]}` -> `200 [{account_id, balance_minor, currency}]` (owner only; used by gateway to compose pages)
+- `POST /balances/query` `{account_ids: [...]}` -> `200 [{account_id, balance_minor, currency}]` (owner only; authoritative reads for admin/audit via the gateway. Customer account pages no longer use it: they read the accounts balance projection)
 - `GET /accounts/{id}/postings?limit=&before=` -> `200 [{id, direction, counterparty, amount_minor, currency, memo, transfer_ref, created_at}]` (owner only). Postings against `bank:transit:<CUR>` are hidden from customer history; the gateway shows customer transaction history from the transfers service (`GET /accounts/{id}/transfers`).
 - `GET /postings/{id}` -> `200` (admin/service only)
 
@@ -43,7 +43,7 @@ Reversal postings (the transfers service sends `{transfer_id}-debit-undo`: trans
 
 **Events**
 - Consumes `accounts.events.v1` with the `common/004-events-kafka` runner (group `ledger-projection`; handler runs in the runner's transaction, so `processed_events` dedup and offset commit are the crate's job): `AccountOpened` upserts projection and balance row (0); `AccountClosed` sets status.
-- Publishes `PostingPosted` via `outbox::enqueue` to `ledger.postings.v1`, key = source `account_id`, payload `{posting_id, transfer_ref, from_account, to_account, amount_minor, currency, memo, posted_at}`. Used for cache invalidation. Transfer-level events (`transfer.*`) come from the transfers service, not the ledger.
+- Publishes `PostingPosted` via `outbox::enqueue` to `ledger.postings.v1`, key = source `account_id`, payload `{posting_id, transfer_ref, from_account, to_account, amount_minor, currency, memo, posted_at, from_balance_after, from_version, to_balance_after, to_version}`. `*_balance_after` is that account's balance right after this posting and `*_version` is its `balances.version` (incremented by 1 under the row lock on every posting that touches the account). Consumed by the accounts balance projection (`accounts/001-service`) and for cache invalidation. Consumers order per account by version because the two sides of a posting can sit on different partitions (key = source account). Transfer-level events (`transfer.*`) come from the transfers service, not the ledger.
 
 ## Dependencies
 - `ledger/002-schema`, `common/001-money-and-errors`, `common/002-auth-claims`, `common/003-telemetry`, `common/004-events-kafka`, `common/005-outbox`. `accounts/001-service` for the events it consumes (can be tested with fabricated events).
@@ -62,7 +62,8 @@ Reversal postings (the transfers service sends `{transfer_id}-debit-undo`: trans
 - [ ] Entries cannot be updated or deleted by the service role.
 - [ ] Duplicate `accounts.events.v1` delivery has no extra effect.
 - [ ] Wiping consumer offsets and projection, then replaying from earliest, rebuilds `account_projection`.
-- [ ] Every posting appears on `ledger.postings.v1` (duplicates tolerated).
+- [ ] Every posting appears on `ledger.postings.v1` (duplicates tolerated), with `*_balance_after` equal to the `balances` row at commit and `*_version` rising by exactly 1 per account per posting.
+- [ ] The ledger is the only authoritative overdraft check; it never reads the accounts projection.
 - [ ] Transit balance is zero after all transfers reach a final state.
 - [ ] The ledger exposes no transfer workflow (no `POST /transfers`).
 

@@ -42,6 +42,7 @@ erDiagram
     uuid account_id PK,FK
     char3 currency
     bigint balance_minor
+    bigint version
     timestamptz updated_at
   }
   postings {
@@ -113,6 +114,7 @@ CREATE TABLE balances (
   account_id    uuid PRIMARY KEY REFERENCES account_projection(account_id),
   currency      char(3) NOT NULL,
   balance_minor bigint  NOT NULL DEFAULT 0,
+  version       bigint  NOT NULL DEFAULT 0,   -- +1 on each posting touching the row, same transaction; published as from_version/to_version
   updated_at    timestamptz NOT NULL DEFAULT now()
 );
 -- Overdraft guard: only treasury may be negative; transit is never negative (a debit always precedes its credit). Enforced in the DB via trigger in 0002.
@@ -267,6 +269,7 @@ GRANT SELECT ON audit_zero_sum_violations, audit_balance_mismatches   TO ledger_
 - [ ] Committing a posting whose entries do not sum to zero, or are not exactly two, fails at commit.
 - [ ] A negative balance on a non-treasury account is rejected; treasury may go negative.
 - [ ] Both audit views return zero rows after a mixed workload.
+- [ ] `balances.version` equals the number of entries on the account and rises by exactly 1 per posting.
 - [ ] Duplicate `(key, customer_id)` idempotency insert is rejected; duplicate `(event_id, consumer)` is rejected.
 - [ ] `ledger_svc` cannot access schema `accounts` or run DDL.
 

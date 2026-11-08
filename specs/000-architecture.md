@@ -20,7 +20,7 @@ Non-goals
 flowchart LR
   UI[web UI] --> GW[gateway]
   GW -- sync --> ACC[accounts]
-  GW -- sync --> LED[ledger]
+  GW -. "admin/audit balances" .-> LED[ledger]
   GW -- "POST /transfers (202)" --> TRF[transfers]
   GW --> AST[assistant]
   AST --> MCP[mcp-server]
@@ -33,6 +33,7 @@ flowchart LR
   ACC -- outbox --> K
   TRF -- "outbox: transfers.commands, transfers.events" --> K
   K -- accounts.events --> LED
+  K -- "ledger.postings (balance projection)" --> ACC
   K -- transfers.commands --> TRF
   TRF -- "saga: pre-check" --> ACC
   TRF -- "saga: postings" --> LED
@@ -47,10 +48,10 @@ All services are Rust (edition 2021+), `axum` for HTTP, `sqlx` for Postgres, `to
 
 | Service | Responsibility | Owned data |
 |---|---|---|
-| accounts | Customers, accounts, account status, saved payees. Publishes `accounts.events.v1` via outbox. Knows no balances. | schema `accounts`: `customers`, `accounts`, `payees`, `outbox` |
-| ledger | Source of truth for money. Double-entry postings, balances, idempotency, system accounts (treasury, transit). No transfer workflow. Keeps a read-only projection of accounts built from `accounts.events.v1`. Publishes events via outbox. | schema `ledger`: `postings`, `entries`, `balances`, `idempotency_keys`, `account_projection`, `outbox` |
+| accounts | Customers, accounts, account status, saved payees. Publishes `accounts.events.v1` via outbox. Keeps a read-only, eventually consistent balance projection built from `ledger.postings.v1` (`account_balances`); serves `balance_minor` + `as_of` on account reads. Not authoritative. | schema `accounts`: `customers`, `accounts`, `payees`, `account_balances`, `processed_events`, `outbox` |
+| ledger | Source of truth for money. Double-entry postings, balances, idempotency, system accounts (treasury, transit). No transfer workflow. Keeps a read-only projection of accounts built from `accounts.events.v1`. Publishes events via outbox (`ledger.postings.v1` carries post-posting balances and per-account versions for the accounts balance projection). Remains the single source of truth and the authoritative overdraft check. | schema `ledger`: `postings`, `entries`, `balances`, `idempotency_keys`, `account_projection`, `outbox` |
 | transfers | Customer-facing transfer workflow. Accepts transfers (202), queues them on Kafka, runs a resumable saga on the generic saga runner (`common/006-saga`; steps debit, credit, done), serves results (poll, SSE). Publishes `transfer.*` events via outbox. | schema `transfers`: `transfers`, `sagas`, `outbox` |
-| gateway | Single public API (BFF). Auth, rate limiting, routing. The only caller of accounts, ledger and transfers on behalf of users. Composes account pages (accounts list + ledger balances). | Redis only (sessions, rate limits) |
+| gateway | Single public API (BFF). Auth, rate limiting, routing. The only caller of accounts, ledger and transfers on behalf of users. Account pages come from accounts alone (balances included, from the projection); ledger balances only for admin/audit. | Redis only (sessions, rate limits) |
 | assistant | RAG question answering and the agent loop. Calls Anthropic. Owns embeddings and chat history. | schema `assistant`: `documents`, `embeddings` (pgvector), `conversations`, `approvals` |
 | mcp-server | Exposes banking API as MCP tools. Thin adapter over gateway; no data. | none |
 | web UI | Browser app: login, accounts, transactions, transfer form, assistant chat, approval prompts. htmx + server-rendered askama templates (Rust). | none |
@@ -73,7 +74,7 @@ Vector store
 
 Redis uses
 - Sessions: `session:{id}` with TTL.
-- Cache (phase 2): balance and recent-transactions reads, `cache:balance:{account_id}`, short TTL, invalidated by ledger events. Sits in front of the gateway's ledger call.
+- Cache (phase 2): balance and recent-transactions reads, `cache:balance:{account_id}`, short TTL, invalidated by ledger events. Optional in front of the gateway's accounts call; the accounts projection already removes the ledger hop.
 - Rate limits: token bucket per user and per IP at the gateway (`429`). Transfers admission control is separate and bounded by backlog and consumer lag (`transfers/001-service`).
 - Idempotency keys (phase 2): fast-path lookup `idem:{key}` at the gateway (SET NX with TTL). The transfers table (client key) and the ledger table (step keys) are the durable source of truth.
 
@@ -85,7 +86,7 @@ Single broker (KRaft mode, no ZooKeeper) locally. Retention for `accounts.events
 |---|---|---|---|---|
 | `transfers.commands.v1` | transfers (outbox relay) | transfers workers (group `transfers-workers`) | `account_id` of source account | Transfer commands: buffer plus per-account ordering |
 | `transfers.events.v1` | transfers (outbox relay) | SSE fan-out in transfers, assistant (embedder), cache invalidator | `account_id` of source account | `transfer.created/debited/completed/failed/reversed` |
-| `ledger.postings.v1` | ledger (outbox relay) | cache invalidator | `account_id` of source account | Posting posted |
+| `ledger.postings.v1` | ledger (outbox relay) | accounts (group `accounts-balances`, balance projection), cache invalidator | `account_id` of source account | Posting posted |
 | `accounts.events.v1` | accounts (outbox relay) | ledger (projection), assistant | `account_id` | Account opened / closed / updated |
 | `assistant.audit.v1` | assistant | none initially (log sink) | `conversation_id` | Agent tool calls and approvals |
 | `*.dlq.v1` | consumers | manual | original key | Poison messages |
@@ -95,7 +96,7 @@ Event envelope (defined in `common/004-events-kafka`; plain JSON, versioned by t
 { "event_id": "uuid", "type": "PostingPosted", "occurred_at": "RFC3339",
   "schema_version": 1, "aggregate_id": "transfer uuid", "payload": { } }
 ```
-`PostingPosted` payload (ledger): `posting_id, transfer_ref, from_account, to_account, amount_minor, currency, memo, posted_at`. `transfer.*` payloads: `transfers/001-service`.
+`PostingPosted` payload (ledger): `posting_id, transfer_ref, from_account, to_account, amount_minor, currency, memo, posted_at, from_balance_after, from_version, to_balance_after, to_version`. `transfer.*` payloads: `transfers/001-service`.
 
 Delivery semantics
 - Producers: at-least-once, `acks=all`, idempotent producer enabled (`common/004-events-kafka`).
@@ -124,8 +125,11 @@ Ledger posting (double-entry + idempotency; `ledger/001-service`): called by the
 
 A transfer targets a destination account number (generated, human-readable). A closed-account race window (close event not yet projected, or account closed after the pre-check) is handled by the credit step failing and the debit being reversed.
 
-Account page
-- Gateway calls accounts for the account list and ledger for balances, then composes the page. Redis balance cache (phase 2) sits in front of the ledger call.
+Account page and balance read
+- Gateway `GET /accounts` calls accounts only. Accounts returns each account with `balance_minor` and `as_of` from its `account_balances` projection, fed by `ledger.postings.v1`. No ledger call, so no `502` composition path; the balance is eventually consistent and the UI shows `as_of`.
+- Ledger `POST /balances/query` / `GET /accounts/{id}/balance` stay for admin/audit and authoritative reads.
+- Transfers uses the same projection for an advisory insufficient-funds fast-fail at admission (no saga row on reject); the ledger debit check stays authoritative. A stale projection can false-pass (transfer ends `FAILED` at the debit) or false-reject right after a credit.
+- Redis balance cache (phase 2) is optional on top of the accounts call.
 
 System accounts
 - `bank:treasury` (one per currency) funds new accounts via ordinary transfers. It is the only account allowed to go negative; the zero-sum invariant still holds. Invisible to customers. Only a service/admin credential (the admin token) can originate transfers from it, enforced in the ledger (via `initiator_role` on the posting), not only the gateway.
@@ -253,7 +257,8 @@ Phase 1: core bank and events (specs: platform, common, accounts, ledger, transf
   - Via the `/admin` console, creating customers and accounts, funding from treasury and bulk transfers works; resubmitting a bulk batch creates no duplicates.
   - Logging in as a customer created in the console shows accounts, balances and transaction list in the UI.
   - A transfer made in the UI returns `202`, shows "processing", and ends `DONE` with both balances updated; retrying with the same idempotency key does not duplicate it.
-  - Overdraft ends the transfer `FAILED` (`insufficient_funds`; treasury excepted). DB-level check shows all postings sum to zero and the transit balance is zero when idle.
+  - Overdraft is rejected: early with `422 insufficient_funds` when the accounts balance projection already shows too little (no transfer created), otherwise the transfer ends `FAILED` (`insufficient_funds`) at the ledger debit, which is authoritative (treasury excepted).
+  - Account balances come from the accounts projection (`balance_minor` + `as_of`) and match the ledger once `ledger.postings.v1` lag is zero; replaying the topic rebuilds them. DB-level check shows all postings sum to zero and the transit balance is zero when idle.
   - Ledger rejects postings for unknown accounts with `409 account_not_ready` (retried by the saga), and cross-currency postings.
   - Killing a transfers worker mid-saga and restarting still ends the transfer in a final state with no duplicate postings; a rejected credit ends `REVERSED`.
   - Over the backlog or lag limit, `POST /transfers` returns `503`/`429` with `Retry-After`.
@@ -300,7 +305,8 @@ Phase 5: load tests and observability (task 005)
 - accounts and ledger are separate services. Services never call each other over HTTP; only the gateway calls them synchronously. State propagates via Kafka.
 - Transfers are a separate service. The gateway returns `202` and the workflow runs as a Kafka-buffered saga (debit, credit, compensation) calling ledger postings; the client gets the result by polling or SSE (no instant success or failure). Ledger only does double-entry postings. Commands keyed by source account for per-account ordering. Overload is shed with `429`/`503` + `Retry-After`.
 - Ledger keeps `account_projection` from `accounts.events.v1`; unknown accounts get `409 account_not_ready`; closed-account race accepted.
-- Balances composed by the gateway (accounts list + ledger balances); Redis cache in front of the ledger call (phase 2).
+- Ledger is the single source of truth for balances and the authoritative overdraft check. Accounts keeps an eventually consistent balance projection from `ledger.postings.v1` (version-guarded, rebuildable by replay); the gateway reads balances from accounts alone. Ledger balance reads are for admin/audit.
+- `ledger.postings.v1`: infinite retention (replay rebuilds the projection).
 - `accounts.events.v1`: infinite retention locally, 3 partitions, replay from earliest, no compaction.
 - Kafka and outbox relays are in phase 1; phase 2 is Redis and hardening.
 - Single currency per account; cross-currency transfers rejected; no FX.

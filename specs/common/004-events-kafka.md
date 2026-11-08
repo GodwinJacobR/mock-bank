@@ -14,7 +14,7 @@ Library crate `common/events` (`bank-events`): one reusable way to publish and c
 ## Out of scope
 - The outbox table and relay (`common/005-outbox`).
 - Avro/Protobuf and schema registry (plain JSON only).
-- Topic creation policy beyond a dev helper (Compose creates topics: 3 partitions, `accounts.events.v1` infinite retention).
+- Topic creation policy beyond a dev helper (Compose creates topics: 3 partitions, `accounts.events.v1` and `ledger.postings.v1` infinite retention, since the accounts balance projection is rebuilt by replay).
 - Log compaction.
 
 ## Design

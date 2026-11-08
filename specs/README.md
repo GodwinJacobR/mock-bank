@@ -14,6 +14,7 @@ Folders
 - New common library specs: events-kafka, outbox, saga, money-and-errors, auth-claims, telemetry.
 - Saga is a generic runner (`common/006-saga`); transfers is its first saga type.
 - Full DB schema specs for accounts and ledger.
+- Accounts keeps a read-only balance projection from `ledger.postings.v1` (`balance_minor` + `as_of`); gateway reads balances from accounts only; transfers uses it for an advisory early funds check. Ledger stays authoritative.
 - Code layout is now `common/` crates plus `services/`.
 - New `transfers/` service (async saga, Kafka-buffered). Ledger is postings only (`ledger.postings.v1`); `transfer.*` events come from transfers.
 

@@ -12,7 +12,7 @@ One folder per service, plus shared areas. Each service folder has a `README.md`
   - [ordering.md](transfers/ordering.md): running instructions in order (saga, compensation, Kafka key per account).
 - [web/](web/README.md): server-rendered UI and admin console.
 - [saga/](saga/README.md): generic saga runner: loop, status, crash recovery (3 crash points).
-- [platform/system-flow.md](platform/system-flow.md): components, async transfer sequence, saga state.
+- [platform/system-flow.md](platform/system-flow.md): components, balance projection (ledger -> Kafka -> accounts), balance read, async transfer sequence, saga state.
 
 Transfers are a separate service ([specs/transfers](../specs/transfers/001-service.md)) and the first saga type on the generic runner ([specs/common/006-saga](../specs/common/006-saga.md)); the ledger only does postings. The client gets `202` and reads the result by polling or SSE.
 
