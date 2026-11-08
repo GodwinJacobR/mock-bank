@@ -11,7 +11,7 @@ Goals
 
 Non-goals
 - Real money, real PII, real payment rails, KYC, regulatory compliance.
-- Cloud deployment, Kubernetes, multi-region.
+- Multi-region. Kubernetes deployment is supported but optional; see [platform/003-scale-and-portability](platform/003-scale-and-portability.md).
 - Production-grade security (local dev only).
 
 ## 2. Component view

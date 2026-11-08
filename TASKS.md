@@ -9,7 +9,7 @@ Status: todo | in progress | done
 | M2 Events and Redis (Kafka) | 0/1 |
 | M3 RAG over transactions with vector DB | 0/1 |
 | M4 AI agent with tools and MCP server | 0/1 |
-| M5 Load testing and observability | 0/1 |
+| M5 Load testing and observability | 0/2 |
 | Chore | 0/1 |
 
 ## M1 – Core (accounts, ledger, Postgres, web UI, admin console)
@@ -48,6 +48,7 @@ Status: todo | in progress | done
 | ID | Task | Spec | Branch | PR | Status |
 |----|------|------|--------|----|--------|
 | T-012 | Load testing and observability | - | - | - | todo |
+| T-014 | Scale and portability (P0 portability, P1 shard-ready) | [scale](specs/platform/003-scale-and-portability.md) | feat/003-scale-and-portability | - | in progress |
 
 ## Chore
 

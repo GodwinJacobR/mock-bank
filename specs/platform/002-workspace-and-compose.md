@@ -24,18 +24,18 @@ Cargo.toml                 # [workspace] members = ["common/*", "services/*"]
 common/{money,errors,events,outbox,auth,telemetry}/
 services/{accounts,ledger,gateway,web}/
 migrations/{accounts,ledger}/
-deploy/postgres/init.sql
+deploy/postgres/bootstrap.sql     # run by the bootstrap job
 ```
 - Crate names: `bank-money`, `bank-errors`, `bank-events`, `bank-outbox`, `bank-auth`, `bank-telemetry` for libraries; service crates are named `accounts`, `ledger`, `gateway`, `web`.
 
-**Postgres bootstrap** (`deploy/postgres/init.sql`, run on first start)
+**Postgres bootstrap** (`deploy/postgres/bootstrap.sql`, run by a one-shot `bootstrap` job as admin; not the Docker entrypoint, since RDS has no entrypoint)
 - One database `bank`; schemas `accounts`, `ledger`.
 - Per schema two roles: `<svc>_owner` (owns the schema and its objects; used only to run migrations) and `<svc>_svc` (runtime role, limited grants defined in `accounts/002-schema` and `ledger/002-schema`). Passwords from env.
 - Neither `_svc` role has any privilege on the other schema.
 
 **Migrations**
 - Naming: `migrations/<service>/NNNN_description.sql` (4-digit, zero-padded, increasing, e.g. `migrations/ledger/0001_init.sql`).
-- Each service runs `sqlx::migrate!("../../migrations/<service>")` on startup connecting as `<svc>_owner`, then opens its runtime pool as `<svc>_svc`.
+- Migrations run in a separate one-shot job (`<svc> migrate`, via `sqlx::migrate!("../../migrations/<service>")`) connecting as `<svc>_owner` (`MIGRATE_DATABASE_URL`), not at service startup. The service only opens its runtime pool as `<svc>_svc`. Compose services use `depends_on` with `service_completed_successfully`. See `platform/003-scale-and-portability`.
 
 **Health**: every service uses the `common/003-telemetry` health helper (`/healthz`, `/readyz`).
 

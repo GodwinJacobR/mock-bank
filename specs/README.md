@@ -20,6 +20,7 @@ Folders
 | [000-architecture](000-architecture.md) | Architecture | none |
 | [platform/001-ci](platform/001-ci.md) | CI | none |
 | [platform/002-workspace-and-compose](platform/002-workspace-and-compose.md) | Workspace and Compose | none |
+| [platform/003-scale-and-portability](platform/003-scale-and-portability.md) | Scale and portability | platform/002-workspace-and-compose |
 | [common/001-money-and-errors](common/001-money-and-errors.md) | Money and errors crates | platform/002-workspace-and-compose |
 | [common/002-auth-claims](common/002-auth-claims.md) | Auth claims crate | common/001-money-and-errors |
 | [common/003-telemetry](common/003-telemetry.md) | Telemetry crate | platform/002-workspace-and-compose |
