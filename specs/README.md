@@ -6,7 +6,7 @@ Folders
 - `platform/`: CI, Cargo workspace, Docker Compose, Postgres bootstrap.
 - `common/`: reusable Rust library crates in `common/<name>/`, shared by services.
 - `accounts/`, `ledger/`: service spec (`001-service.md`) and Postgres DDL (`002-schema.md`).
-- `gateway/`, `web/`, `seed/`: one spec each.
+- `gateway/`, `web/`: service spec (`001-service.md`) and admin console spec (`002-admin.md`).
 
 ## Changes
 - Specs are grouped by area folder.
@@ -30,12 +30,13 @@ Folders
 | [ledger/001-service](ledger/001-service.md) | Ledger service | ledger/002-schema, common/* |
 | [ledger/002-schema](ledger/002-schema.md) | Ledger DB schema | platform/002-workspace-and-compose |
 | [gateway/001-service](gateway/001-service.md) | Gateway | accounts/001-service, ledger/001-service |
+| [gateway/002-admin](gateway/002-admin.md) | Gateway admin API | gateway/001-service |
 | [web/001-service](web/001-service.md) | Web UI | gateway/001-service |
-| [seed/001-seed](seed/001-seed.md) | Seed | gateway/001-service |
+| [web/002-admin](web/002-admin.md) | Web admin console | web/001-service, gateway/002-admin |
 
 ## Build order
 1. `platform/001-ci` and `platform/002-workspace-and-compose` first.
 2. `common/*` libraries (001-money-and-errors, 002-auth-claims, 003-telemetry, then 004-events-kafka, then 005-outbox).
 3. `accounts/*` and `ledger/*` in parallel (002-schema first, then 001-service).
 4. `gateway/001-service`.
-5. `web/001-service` and `seed/001-seed` in parallel.
+5. `web/001-service` and `gateway/002-admin` in parallel, then `web/002-admin`.

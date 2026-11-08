@@ -6,8 +6,8 @@ Status: draft
 A Cargo workspace with `common/` libraries and `services/` binaries, and a `docker compose up` that starts infrastructure and creates per-service DB roles and schemas.
 
 ## Scope (in)
-- Root `Cargo.toml` workspace. Members: `common/*` (one library crate each: `money`, `errors`, `events`, `outbox`, `auth`, `telemetry`) and `services/*` (`accounts`, `ledger`, `gateway`, `web`, `seed`). Service crates may start as skeletons with a health endpoint.
-- `docker-compose.yml`: `postgres` (`pgvector/pgvector:pg16`, port 5432, volume `pgdata`), `kafka` (`apache/kafka`, KRaft, port 9092, volume `kafkadata`, 3 partitions default), service containers, `seed` under profile `tools`.
+- Root `Cargo.toml` workspace. Members: `common/*` (one library crate each: `money`, `errors`, `events`, `outbox`, `auth`, `telemetry`) and `services/*` (`accounts`, `ledger`, `gateway`, `web`). Service crates may start as skeletons with a health endpoint.
+- `docker-compose.yml`: `postgres` (`pgvector/pgvector:pg16`, port 5432, volume `pgdata`), `kafka` (`apache/kafka`, KRaft, port 9092, volume `kafkadata`, 3 partitions default), service containers.
 - `.env.example`; no secrets committed.
 - One shared cargo-chef `Dockerfile` (build arg `SERVICE`, path `services/$SERVICE`).
 - Migrations layout and bootstrap of roles/schemas.
@@ -15,18 +15,18 @@ A Cargo workspace with `common/` libraries and `services/` binaries, and a `dock
 ## Out of scope
 - Library crate behaviour: see `common/001-money-and-errors`, `common/004-events-kafka`, `common/005-outbox`, `common/002-auth-claims`, `common/003-telemetry`.
 - Redis, assistant, mcp-server, observability stack, kafka-ui, Qdrant.
-- Service business logic (`accounts/*`, `ledger/*`, `gateway/001-service`, `web/001-service`, `seed/001-seed`).
+- Service business logic (`accounts/*`, `ledger/*`, `gateway/001-service`, `web/001-service`, `gateway/002-admin`, `web/002-admin`).
 
 ## Design
 **Layout**
 ```
 Cargo.toml                 # [workspace] members = ["common/*", "services/*"]
 common/{money,errors,events,outbox,auth,telemetry}/
-services/{accounts,ledger,gateway,web,seed}/
+services/{accounts,ledger,gateway,web}/
 migrations/{accounts,ledger}/
 deploy/postgres/init.sql
 ```
-- Crate names: `bank-money`, `bank-errors`, `bank-events`, `bank-outbox`, `bank-auth`, `bank-telemetry` for libraries; service crates are named `accounts`, `ledger`, `gateway`, `web`, `seed`.
+- Crate names: `bank-money`, `bank-errors`, `bank-events`, `bank-outbox`, `bank-auth`, `bank-telemetry` for libraries; service crates are named `accounts`, `ledger`, `gateway`, `web`.
 
 **Postgres bootstrap** (`deploy/postgres/init.sql`, run on first start)
 - One database `bank`; schemas `accounts`, `ledger`.

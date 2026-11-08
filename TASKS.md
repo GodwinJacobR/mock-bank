@@ -12,7 +12,7 @@ Status: todo | in progress | done
 | M5 Load testing and observability | 0/1 |
 | Chore | 0/1 |
 
-## M1 – Core (accounts, ledger, Postgres, web UI, seed)
+## M1 – Core (accounts, ledger, Postgres, web UI, admin console)
 
 | ID | Task | Spec | Branch | PR | Status |
 |----|------|------|--------|----|--------|
@@ -20,7 +20,7 @@ Status: todo | in progress | done
 | T-002 | Ledger service and schema | [ledger](specs/ledger/001-service.md), [schema](specs/ledger/002-schema.md) | - | - | todo |
 | T-003 | Gateway service | [gateway](specs/gateway/001-service.md) | - | - | todo |
 | T-004 | Web UI | [web](specs/web/001-service.md) | - | - | todo |
-| T-005 | Seed script | [seed](specs/seed/001-seed.md) | - | - | todo |
+| T-005 | Admin console (gateway admin API, web /admin, no seed data) | [gateway](specs/gateway/002-admin.md), [web](specs/web/002-admin.md) | feat/admin-console-spec | - | in progress |
 | T-006 | Platform CI | [ci](specs/platform/001-ci.md) | - | - | todo |
 | T-007 | Workspace and compose | [workspace](specs/platform/002-workspace-and-compose.md) | - | - | todo |
 | T-008 | Common libs (money/errors, auth claims, telemetry, events, outbox) | [common](specs/common/) | - | - | todo |
