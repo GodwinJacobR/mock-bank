@@ -5,7 +5,7 @@ Status: todo | in progress | done
 
 | Milestone | Done/Total |
 |-----------|------------|
-| M1 Core | 0/8 |
+| M1 Core | 0/9 |
 | M2 Events and Redis (Kafka) | 0/1 |
 | M3 RAG over transactions with vector DB | 0/1 |
 | M4 AI agent with tools and MCP server | 0/1 |
@@ -23,6 +23,7 @@ Status: todo | in progress | done
 | T-005 | Admin console (gateway admin API, web /admin, no seed data) | [gateway](specs/gateway/002-admin.md), [web](specs/web/002-admin.md) | feat/admin-console-spec | - | in progress |
 | T-006 | Platform CI | [ci](specs/platform/001-ci.md) | - | - | todo |
 | T-007 | Workspace and compose | [workspace](specs/platform/002-workspace-and-compose.md) | - | - | todo |
+| T-015 | Transfers service and schema (async saga, Kafka-buffered) | [transfers](specs/transfers/001-service.md), [schema](specs/transfers/002-schema.md) | docs/system-flow | - | in progress |
 | T-008 | Common libs (money/errors, auth claims, telemetry, events, outbox) | [common](specs/common/) | - | - | todo |
 
 ## M2 – Events and Redis (Kafka)

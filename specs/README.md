@@ -5,7 +5,7 @@ Specs are grouped by area. Each folder holds the spec(s) for one area, numbered 
 Folders
 - `platform/`: CI, Cargo workspace, Docker Compose, Postgres bootstrap.
 - `common/`: reusable Rust library crates in `common/<name>/`, shared by services.
-- `accounts/`, `ledger/`: service spec (`001-service.md`) and Postgres DDL (`002-schema.md`).
+- `accounts/`, `ledger/`, `transfers/`: service spec (`001-service.md`) and Postgres DDL (`002-schema.md`).
 - `gateway/`, `web/`: service spec (`001-service.md`) and admin console spec (`002-admin.md`).
 
 ## Changes
@@ -14,6 +14,7 @@ Folders
 - New common library specs: events-kafka, outbox, money-and-errors, auth-claims, telemetry.
 - Full DB schema specs for accounts and ledger.
 - Code layout is now `common/` crates plus `services/`.
+- New `transfers/` service (async saga, Kafka-buffered). Ledger is postings only (`ledger.postings.v1`); `transfer.*` events come from transfers.
 
 | Spec | Title | Depends on |
 |---|---|---|
@@ -30,7 +31,9 @@ Folders
 | [accounts/002-schema](accounts/002-schema.md) | Accounts DB schema | platform/002-workspace-and-compose |
 | [ledger/001-service](ledger/001-service.md) | Ledger service | ledger/002-schema, common/* |
 | [ledger/002-schema](ledger/002-schema.md) | Ledger DB schema | platform/002-workspace-and-compose |
-| [gateway/001-service](gateway/001-service.md) | Gateway | accounts/001-service, ledger/001-service |
+| [transfers/001-service](transfers/001-service.md) | Transfers service | transfers/002-schema, accounts/001-service, ledger/001-service, common/* |
+| [transfers/002-schema](transfers/002-schema.md) | Transfers DB schema | platform/002-workspace-and-compose |
+| [gateway/001-service](gateway/001-service.md) | Gateway | accounts/001-service, ledger/001-service, transfers/001-service |
 | [gateway/002-admin](gateway/002-admin.md) | Gateway admin API | gateway/001-service |
 | [web/001-service](web/001-service.md) | Web UI | gateway/001-service |
 | [web/002-admin](web/002-admin.md) | Web admin console | web/001-service, gateway/002-admin |
@@ -38,6 +41,6 @@ Folders
 ## Build order
 1. `platform/001-ci` and `platform/002-workspace-and-compose` first.
 2. `common/*` libraries (001-money-and-errors, 002-auth-claims, 003-telemetry, then 004-events-kafka, then 005-outbox).
-3. `accounts/*` and `ledger/*` in parallel (002-schema first, then 001-service).
+3. `accounts/*` and `ledger/*` in parallel (002-schema first, then 001-service), then `transfers/*` (002-schema first, then 001-service).
 4. `gateway/001-service`.
 5. `web/001-service` and `gateway/002-admin` in parallel, then `web/002-admin`.

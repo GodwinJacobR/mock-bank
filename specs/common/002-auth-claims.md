@@ -15,8 +15,8 @@ Library crate `common/auth` (`bank-auth`): the internal signed JWT the gateway s
 - Public session cookies and admin token handling (gateway).
 
 ## Design
-- `Claims { sub: Uuid (customer id), iss: "gateway", exp, iat, role: Role }`, `Role = customer | admin`.
-- Algorithm HS256, secret from env `JWT_SECRET`. Gateway mints with a 60 s lifetime; verification allows 5 s clock leeway and requires `iss = gateway`.
+- `Claims { sub: Uuid (customer id), iss: "gateway", exp, iat, role: Role }`, `Role = customer | admin | service`. `iss` is `gateway` or `transfers` (the transfers workers mint tokens for their saga calls; `role = service` is accepted only on ledger `POST /postings`).
+- Algorithm HS256, secret from env `JWT_SECRET`. Gateway mints with a 60 s lifetime; verification allows 5 s clock leeway and requires `iss` in `{gateway, transfers}`.
 - Header contract: `Authorization: Bearer <jwt>` plus `X-Customer-Id: <uuid>`. The extractor rejects the request (`401`) if the header and `sub` disagree.
 - Admin / service token role: when the gateway sees a valid `X-Admin-Token` (equal to `ADMIN_TOKEN`) it mints a token with `role = admin` (the admin/service role). `sub` is the customer being acted for, or the nil UUID when none. Services honour `admin` for privileged operations, e.g. ledger allows treasury-origin transfers only for it. The admin token itself never leaves the gateway.
 - Helpers: `Caller::require_admin()` (else `forbidden`), `Caller::owns(customer_id)`.

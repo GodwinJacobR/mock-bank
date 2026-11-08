@@ -6,7 +6,7 @@ Status: draft
 A Cargo workspace with `common/` libraries and `services/` binaries, and a `docker compose up` that starts infrastructure and creates per-service DB roles and schemas.
 
 ## Scope (in)
-- Root `Cargo.toml` workspace. Members: `common/*` (one library crate each: `money`, `errors`, `events`, `outbox`, `auth`, `telemetry`) and `services/*` (`accounts`, `ledger`, `gateway`, `web`). Service crates may start as skeletons with a health endpoint.
+- Root `Cargo.toml` workspace. Members: `common/*` (one library crate each: `money`, `errors`, `events`, `outbox`, `auth`, `telemetry`) and `services/*` (`accounts`, `ledger`, `transfers`, `gateway`, `web`). Service crates may start as skeletons with a health endpoint.
 - `docker-compose.yml`: `postgres` (`pgvector/pgvector:pg16`, port 5432, volume `pgdata`), `kafka` (`apache/kafka`, KRaft, port 9092, volume `kafkadata`, 3 partitions default), service containers.
 - `.env.example`; no secrets committed.
 - One shared cargo-chef `Dockerfile` (build arg `SERVICE`, path `services/$SERVICE`).
@@ -15,22 +15,22 @@ A Cargo workspace with `common/` libraries and `services/` binaries, and a `dock
 ## Out of scope
 - Library crate behaviour: see `common/001-money-and-errors`, `common/004-events-kafka`, `common/005-outbox`, `common/002-auth-claims`, `common/003-telemetry`.
 - Redis, assistant, mcp-server, observability stack, kafka-ui, Qdrant.
-- Service business logic (`accounts/*`, `ledger/*`, `gateway/001-service`, `web/001-service`, `gateway/002-admin`, `web/002-admin`).
+- Service business logic (`accounts/*`, `ledger/*`, `transfers/*`, `gateway/001-service`, `web/001-service`, `gateway/002-admin`, `web/002-admin`).
 
 ## Design
 **Layout**
 ```
 Cargo.toml                 # [workspace] members = ["common/*", "services/*"]
 common/{money,errors,events,outbox,auth,telemetry}/
-services/{accounts,ledger,gateway,web}/
-migrations/{accounts,ledger}/
+services/{accounts,ledger,transfers,gateway,web}/
+migrations/{accounts,ledger,transfers}/
 deploy/postgres/bootstrap.sql     # run by the bootstrap job
 ```
-- Crate names: `bank-money`, `bank-errors`, `bank-events`, `bank-outbox`, `bank-auth`, `bank-telemetry` for libraries; service crates are named `accounts`, `ledger`, `gateway`, `web`.
+- Crate names: `bank-money`, `bank-errors`, `bank-events`, `bank-outbox`, `bank-auth`, `bank-telemetry` for libraries; service crates are named `accounts`, `ledger`, `transfers`, `gateway`, `web`.
 
 **Postgres bootstrap** (`deploy/postgres/bootstrap.sql`, run by a one-shot `bootstrap` job as admin; not the Docker entrypoint, since RDS has no entrypoint)
-- One database `bank`; schemas `accounts`, `ledger`.
-- Per schema two roles: `<svc>_owner` (owns the schema and its objects; used only to run migrations) and `<svc>_svc` (runtime role, limited grants defined in `accounts/002-schema` and `ledger/002-schema`). Passwords from env.
+- One database `bank`; schemas `accounts`, `ledger`, `transfers`.
+- Per schema two roles: `<svc>_owner` (owns the schema and its objects; used only to run migrations) and `<svc>_svc` (runtime role, limited grants defined in `accounts/002-schema`, `ledger/002-schema` and `transfers/002-schema`). Passwords from env.
 - Neither `_svc` role has any privilege on the other schema.
 
 **Migrations**
@@ -41,7 +41,7 @@ deploy/postgres/bootstrap.sql     # run by the bootstrap job
 
 **Compose**
 - Build paths: `services/<name>` (e.g. `build: { context: ., args: { SERVICE: ledger } }`).
-- Services depend on `postgres` and `kafka` healthchecks. Host ports: gateway 3000, web 8080; accounts/ledger internal only.
+- Services depend on `postgres` and `kafka` healthchecks. Host ports: gateway 3000, web 8080; accounts/ledger/transfers internal only (transfers on 3004).
 - `.env.example` keys: DB passwords per role, `JWT_SECRET`, `ADMIN_TOKEN`, `KAFKA_BROKERS`, `RUST_LOG`.
 
 ## Dependencies
@@ -50,7 +50,7 @@ deploy/postgres/bootstrap.sql     # run by the bootstrap job
 ## Acceptance criteria
 - [ ] `cargo build --workspace` succeeds with all `common/*` and `services/*` members.
 - [ ] `docker compose up` starts postgres and kafka healthy, and all service containers.
-- [ ] Schemas `accounts` and `ledger` and their roles exist; a `_svc` role cannot write the other's schema.
+- [ ] Schemas `accounts`, `ledger` and `transfers` and their roles exist; a `_svc` role cannot write the other's schema.
 - [ ] A `_svc` role cannot run DDL in its own schema (only `_owner` can).
 - [ ] Rebuild after a source-only change reuses the cargo-chef dependency layer.
 

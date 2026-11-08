@@ -1,42 +1,47 @@
 # Transfers under load (backpressure)
 
-When the ledger (transfer path) is busy, the system should slow callers down instead of falling over.
+When transfers are busy, the system slows callers down instead of falling over. Transfers are accepted into a bounded queue; the ledger is protected behind it.
 
-Legend: **[Spec]** already in specs. **[Proposal]** not yet specced.
+Legend: **[Spec]** in specs. **[Proposal]** not yet specced. The core of this page is now Spec ([transfers/001-service](../specs/transfers/001-service.md)).
 
 ```mermaid
 flowchart LR
   C[client] --> RL{"gateway rate limit (token bucket)"}
   RL -- over limit --> R429["429 + Retry-After"]
-  RL --> CL{"gateway concurrency limit"}
-  CL -- full --> R503["503 + Retry-After (load shed)"]
-  CL --> LED[ledger]
-  LED --> Q{"bounded queue / semaphore"}
-  Q -- full --> R503
-  Q --> POOL["small DB pool + PgBouncer"]
-  POOL --> PG[(Postgres)]
+  RL --> ADM{"transfers admission: backlog, consumer lag, per-customer in-flight"}
+  ADM -- over global limit --> R503["503 overloaded + Retry-After"]
+  ADM -- over per-customer limit --> R429b["429 too_many_in_flight + Retry-After"]
+  ADM --> TX["one tx: transfer PENDING + outbox"]
+  TX --> A202["202 + transfer_id"]
+  TX --> K{{"Kafka transfers.commands.v1 (key = source account)"}}
+  K --> W["workers (concurrency <= partitions)"]
+  W --> LED[ledger postings]
+  LED --> PG[(Postgres)]
+  LED -. "slow ledger = lag grows" .-> K
+  K -. "lag over limit" .-> ADM
   R429 -. "retry, same Idempotency-Key" .-> C
-  R503 -. "backoff + jitter" .-> C
+  R503 -. "backoff + jitter, honor Retry-After" .-> C
+  A202 -. "poll or SSE for result" .-> C
 ```
 
 ## What the specs say
 
-- [Spec] R4: timeouts on every network call, bounded pools and queues, overload returns 503/429 with `Retry-After` (platform/003).
-- [Spec] Rate limiting: Redis token bucket per user and per IP at the gateway, plus an in-process per-pod limit (architecture section 4, platform/003). Exceeding returns `429` (phase 2 acceptance).
-- [Spec] Gateway concurrency limit and load shedding; small DB pools plus PgBouncer or RDS Proxy (platform/003).
-- [Spec] Idempotency: `Idempotency-Key` required on writes; ledger stores the response; same key + same body replays (ledger/001). Redis `idem:{key}` fast path in phase 2.
-- [Spec] Metrics: pool wait, RED, outbox and consumer lag. SLO p99 < 200 ms.
-- [Spec] `409 account_not_ready` is retriable with the same key; bulk admin retries it with backoff.
+- [Spec] Gateway: Redis token bucket per user and per IP, `429` with `Retry-After` (phase 2; gateway/001, platform/003).
+- [Spec] Transfers admission control before the insert: global backlog (`TRANSFERS_MAX_BACKLOG`, default 10000) and consumer lag (`TRANSFERS_MAX_LAG`, default 5000) -> `503 overloaded`; per-customer in-flight (`TRANSFERS_MAX_PER_CUSTOMER`, default 50) -> `429 too_many_in_flight`; always with `Retry-After` and nothing written, so a retry with the same key is safe (transfers/001).
+- [Spec] Kafka (`transfers.commands.v1`) is the buffer between accepting and processing. Workers drain at the ledger's pace; a slow ledger grows lag, which trips admission, so the ledger is never flooded.
+- [Spec] Idempotency: client `Idempotency-Key` stored on the transfer row; same key + same body returns the same `transfer_id`; different body is `422`.
+- [Spec] R4 (platform/003): timeouts on every network call, bounded pools and queues, overload returns 503/429 with `Retry-After`; small DB pools plus PgBouncer or RDS Proxy.
+- [Spec] The saga retries transient ledger errors (including `409 account_not_ready`) with the same step key, 5 attempts, then fails or reverses.
+- [Spec] Metrics: backlog, consumer lag, step latency, time-to-final, admission rejections, plus pool wait, RED, outbox lag. The p99 < 200 ms SLO applies to accepting (`POST /transfers`), not to time-to-final.
+- [Spec] Trade-off: the client gets `202`, not the result. It polls `GET /transfers/{id}` or uses SSE `GET /transfers/{id}/events`; the UI shows "processing".
 
 ## Proposal (not in specs yet)
 
 - Numbers: bucket size and refill per user (e.g. burst 10, 5/s); per-pod concurrency (e.g. 2x DB pool size).
-- Ledger: bounded semaphore in front of the transfer handler, wait limit (e.g. 200 ms), then `503 Retry-After: 1`.
-- Shed order: cached reads first, then non-admin transfers; never skip the idempotency check.
-- Client rule: retry only 429/503/timeouts, same `Idempotency-Key`, exponential backoff with jitter, honor `Retry-After`.
-- `Retry-After`: for 429 from bucket refill time; for 503 a small fixed value plus jitter.
-- Alert on pool wait and 503 rate.
+- Shed order under load: cached reads first, then non-admin transfers; admin funding last.
+- `Retry-After` tuning: for 429 from bucket refill time; for 503 an estimate from backlog / completion rate plus jitter (spec gives the idea, exact formula is open).
+- Alert on backlog, lag, pool wait and 503 rate.
 
 ## Why retries are safe
 
-A retry after a timeout may hit a transfer that already committed. The ledger returns the stored response for the same key and body, so there is no double debit.
+A retry after a timeout may hit a transfer that is already accepted. Transfers returns the same `transfer_id` for the same key and body, so there is no second command. Inside the saga, a repeated ledger call with the same step key returns the stored response, so there is no double debit.

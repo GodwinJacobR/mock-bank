@@ -16,6 +16,7 @@ Own customers, accounts, payees and login sessions; publish account events. Know
 - Balances, transfers (ledger).
 - Redis sessions (phase 2), KYC, email verification.
 - Calling other services over HTTP.
+- Being called by transfers workers other than for the pre-check endpoints above (`GET /accounts/{id}`, `GET /accounts/resolve`).
 
 ## Design
 
@@ -29,7 +30,8 @@ Own customers, accounts, payees and login sessions; publish account events. Know
 - `POST /accounts` `{currency}` -> `201 {id, account_number, currency, status}` (owner from JWT; admin may pass `customer_id`)
 - `GET /accounts` -> `200 [{id, account_number, currency, status}]` (admin: all accounts with `customer_id`; optional `customer_id` filter)
 - `GET /customers` (admin) -> `200 [{id, email, name}]`
-- `GET /accounts/{id}` -> `200` or `404` (other customer's account is `404`)
+- `GET /accounts/{id}` -> `200` or `404` (other customer's account is `404`; admin/service sees any)
+- `GET /accounts/resolve?account_number=` -> `200 {id, currency, status}` or `404`. Minimal fields only (no owner, name or email). Used by the transfers pre-check; any authenticated caller. Fixes no cross-customer lookup by name or email.
 - `PATCH /accounts/{id}` `{status: "closed"}` -> `200`
 - `POST /payees` `{name, account_number}` -> `201 {id, name, account_number}`
 - `GET /payees` -> `200 [...]`; `DELETE /payees/{id}` -> `204`
@@ -50,6 +52,7 @@ Own customers, accounts, payees and login sessions; publish account events. Know
 - [ ] Admin can list all customers and accounts; customer role cannot.
 - [ ] Closing an account emits `AccountClosed`.
 - [ ] Customer A cannot read or modify customer B's accounts or payees.
+- [ ] `GET /accounts/resolve` returns only `{id, currency, status}` for a valid number and 404 otherwise.
 - [ ] Adding the same payee account number twice for a customer is a 409.
 - [ ] Every outbox row is eventually published to `accounts.events.v1` with the account id as key.
 - [ ] Service writes only to schema `accounts`.

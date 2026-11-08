@@ -20,7 +20,7 @@ This spec covers P0 (portability) and P1 (shard-ready code) only.
 
 ## Requirements
 - R1 Stateless services: no local state, any instance serves any request.
-- R2 Shard key: every ledger row carries `account_id`. 256 logical shards map to N physical primaries via `hash(account_id)`. A transfer within one shard is one DB transaction.
+- R2 Shard key: every ledger row carries `account_id`. 256 logical shards map to N physical primaries via `hash(account_id)`. A posting within one shard is one DB transaction.
 - R3 Idempotency: `Idempotency-Key` per customer on writes; `event_id` dedup on consumers.
 - R4 Limits: timeouts on every network call, bounded pools and queues, overload returns 503/429 with `Retry-After`.
 - R5 Config: all config from env vars, no hosts in code, secrets via env or mounted files.
@@ -35,11 +35,11 @@ This spec covers P0 (portability) and P1 (shard-ready code) only.
 - Kafka about 150 MB/s, about 6 brokers at RF3.
 
 **Key decisions**
-- Cross-shard transfers: accepted with delayed credit. Debit the source into a per-shard clearing account and write an outbox event; the destination shard credits idempotently on the event. Each shard sums to zero. Designed now, implemented in P4. Rejected: 2PC and distributed SQL (Citus/Cockroach), for latency and no plain RDS.
+- Cross-shard transfers: accepted with delayed credit (the transfers saga debit-to-transit then credit generalises to this: transit becomes the per-shard clearing account). Debit the source into a per-shard clearing account and write an outbox event; the destination shard credits idempotently on the event. Each shard sums to zero. Designed now, implemented in P4. Rejected: 2PC and distributed SQL (Citus/Cockroach), for latency and no plain RDS.
 - Treasury hot account: split into K sub-accounts, random pick per transfer; audit sums them.
-- Reads: the transfer path reads the primary only. Balance and history read Redis, then a read replica. The transfer response returns the new balance.
+- Reads: the transfer path reads the primary only. Balance and history read Redis, then a read replica. Transfers are accepted asynchronously (`202`), so the new balance is read after the transfer reaches a final state.
 - Kafka: partition key `account_id`, 64+ partitions.
-- Backpressure: gateway concurrency limit and load shedding; small DB pools plus PgBouncer or RDS Proxy.
+- Backpressure: gateway concurrency limit and load shedding; transfers admission control on backlog and consumer lag (`transfers/001-service`), Kafka keyed by source account as the buffer; small DB pools plus PgBouncer or RDS Proxy.
 - Rate limiting: Redis token bucket per user/IP plus an in-process per-pod limit.
 - Observability: RED metrics, `shard` label, outbox and consumer lag, pool wait. SLO: p99 < 200 ms, errors < 0.1%.
 - Deploy tool: Kustomize (base plus kind/cloud overlays, in P2) with Compose for local. Helm rejected for now. The cloud overlay is AWS-only; code stays provider-neutral via env vars.

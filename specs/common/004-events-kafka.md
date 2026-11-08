@@ -24,7 +24,7 @@ Library crate `common/events` (`bank-events`): one reusable way to publish and c
 ```rust
 pub struct EventEnvelope<T> {
     pub event_id: Uuid,
-    pub r#type: String,          // e.g. "TransferPosted"
+    pub r#type: String,          // e.g. "PostingPosted"
     pub occurred_at: DateTime<Utc>, // RFC3339
     pub schema_version: u32,
     pub aggregate_id: String,
@@ -36,10 +36,12 @@ pub struct EventEnvelope<T> {
 ```rust
 pub struct Topic<T> { pub name: &'static str, _p: PhantomData<T> }
 pub const ACCOUNTS_EVENTS: Topic<AccountEvent> = Topic::new("accounts.events.v1");
-pub const LEDGER_TRANSFERS: Topic<TransferEvent> = Topic::new("ledger.transfers.v1");
+pub const LEDGER_POSTINGS: Topic<PostingEvent> = Topic::new("ledger.postings.v1");
+pub const TRANSFERS_COMMANDS: Topic<TransferCommand> = Topic::new("transfers.commands.v1");
+pub const TRANSFERS_EVENTS: Topic<TransferEvent> = Topic::new("transfers.events.v1");
 impl<T> Topic<T> { pub fn dlq(&self) -> String /* "<topic>.dlq.v1" derived from the base name */ }
 ```
-- DLQ naming: `<topic>.dlq.v1`, e.g. `accounts.events.dlq.v1` (the `.v1` suffix of the source topic is replaced). Event payload structs (`AccountEvent`, `TransferEvent`) live in this crate so producers and consumers share them.
+- DLQ naming: `<topic>.dlq.v1`, e.g. `accounts.events.dlq.v1` (the `.v1` suffix of the source topic is replaced). Event payload structs (`AccountEvent`, `PostingEvent`, `TransferCommand`, `TransferEvent`) live in this crate so producers and consumers share them.
 
 **Publisher**
 - Settings: `acks=all`, `enable.idempotence=true`, `max.in.flight.requests.per.connection=5`, `compression.type=lz4`, bounded `message.timeout.ms`.

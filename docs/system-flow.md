@@ -1,6 +1,6 @@
 # System flow
 
-Source: [specs/000-architecture.md](../specs/000-architecture.md). Note: there is no separate "transfers" service. Transfers live in the **ledger**.
+Source: [specs/000-architecture.md](../specs/000-architecture.md), [specs/transfers/001-service.md](../specs/transfers/001-service.md). Transfers are a separate **transfers** service. The **ledger** only does double-entry postings and balances.
 
 ## Components
 
@@ -8,50 +8,87 @@ Source: [specs/000-architecture.md](../specs/000-architecture.md). Note: there i
 flowchart LR
   UI["web UI (htmx + askama)"] --> GW[gateway]
   GW -- sync HTTP --> ACC[accounts]
-  GW -- sync HTTP --> LED["ledger (transfers, balances)"]
+  GW -- sync HTTP --> LED["ledger (postings, balances)"]
+  GW -- "POST /transfers (202), GET result, SSE" --> TRF["transfers (API + saga workers)"]
   GW --> R[("Redis: sessions, rate limit, idem, cache")]
   ACC --> PG[("Postgres, schema per service")]
   LED --> PG
+  TRF --> PG
   ACC -- outbox --> K{{Kafka}}
   LED -- outbox --> K
+  TRF -- "outbox: transfers.commands.v1, transfers.events.v1" --> K
   K -- accounts.events.v1 --> LED
-  K -- ledger.transfers.v1 --> AST["assistant (phase 3)"]
+  K -- "transfers.commands.v1 (key = source account)" --> TRF
+  TRF -- "saga: pre-check" --> ACC
+  TRF -- "saga: debit, credit, undo" --> LED
+  K -- transfers.events.v1 --> AST["assistant (phase 3)"]
 ```
 
-- Only the gateway calls accounts and ledger (sync). Services never call each other over HTTP.
-- State moves between services via Kafka (ledger builds `account_projection` from `accounts.events.v1`).
+- Users reach accounts, ledger and transfers only through the gateway. The one service-to-service exception is the transfers workers calling accounts (pre-check) and ledger (postings) in the saga.
+- State moves between services via Kafka (ledger builds `account_projection` from `accounts.events.v1`; transfers queue their own commands on `transfers.commands.v1`).
 - Redis is phase 2; assistant and MCP are phase 3-4 (see spec phases).
 
-## Transfer sequence
+## Transfer sequence (async)
 
 ```mermaid
 sequenceDiagram
   participant UI as web UI
   participant GW as gateway
-  participant R as Redis
-  participant L as ledger
-  participant DB as Postgres
+  participant T as transfers API
+  participant DB as Postgres (transfers)
   participant K as Kafka
+  participant W as transfer worker
+  participant A as accounts
+  participant L as ledger
   UI->>GW: POST /transfers (Idempotency-Key)
-  GW->>GW: auth, rate limit
-  GW->>R: idem:{key} (phase 2)
-  GW->>L: POST /transfers
-  L->>DB: BEGIN
-  L->>DB: check accounts, idempotency key
-  L->>DB: lock balances (id order)
-  L->>DB: funds check, insert transfer + 2 entries, update balances, idem record, outbox row
-  L->>DB: COMMIT
-  L-->>GW: 201
-  GW-->>UI: 201
-  L->>K: outbox relay publishes TransferPosted
+  GW->>GW: auth, rate limit (429 + Retry-After)
+  GW->>T: POST /transfers
+  T->>T: admission (backlog, lag): 503 + Retry-After if over
+  T->>DB: BEGIN; insert transfer PENDING + outbox (command, transfer.created); COMMIT
+  T-->>GW: 202 {transfer_id}
+  GW-->>UI: 202 {transfer_id}
+  UI->>GW: GET /transfers/{id}/events (SSE) or poll GET /transfers/{id}
+  T->>K: relay publishes command (key = source account)
+  K->>W: transfers.commands.v1
+  W->>A: pre-check (owner, open, currency)
+  W->>L: debit: customer to transit (key id-debit)
+  L-->>W: ok (or 422 insufficient_funds -> FAILED)
+  W->>DB: DEBITED + outbox transfer.debited
+  W->>L: credit: transit to destination (key id-credit)
+  L-->>W: ok (or rejected -> undo, key id-debit-undo -> REVERSED)
+  W->>DB: CREDITED, then DONE + outbox transfer.completed
+  T->>K: relay publishes transfer.* on transfers.events.v1
+  T-->>UI: SSE final state; UI replaces "processing"
 ```
+
+The client does not get instant success or failure: `202` only means accepted. The UI shows "processing" until a final state (`DONE`, `FAILED`, `REVERSED`).
+
+## Saga state
+
+```mermaid
+stateDiagram-v2
+  [*] --> PENDING: POST /transfers
+  PENDING --> FAILED: pre-check fails or debit rejected
+  PENDING --> DEBITED: ledger debit ok
+  DEBITED --> CREDITED: ledger credit ok
+  CREDITED --> DONE: finalize
+  DEBITED --> REVERSING: credit rejected
+  REVERSING --> REVERSED: debit undone
+  DONE --> [*]
+  FAILED --> [*]
+  REVERSED --> [*]
+```
+
+The state is saved in `transfers.transfers`, so a crashed worker resumes from the saved state. `REVERSING` is an internal state so a crash during compensation resumes into the undo.
 
 ## Account page
 
-Gateway calls accounts (list) and ledger (balances), then composes the page. Redis balance cache sits in front of the ledger call (phase 2).
+Gateway calls accounts (list) and ledger (balances), then composes the page. Redis balance cache sits in front of the ledger call (phase 2). A balance reflects a transfer once its postings are done.
 
 ## Guarantees
 
-- Double entry: entries sum to 0 per transfer.
-- Idempotent writes (`Idempotency-Key`).
+- Double entry: entries sum to 0 per posting; the transit account is zero when nothing is in flight.
+- Idempotent writes: client `Idempotency-Key` on the transfer; ledger keys `{transfer_id}-{step}` and `{transfer_id}-{step}-undo`.
+- Per-account ordering: Kafka key = source account id.
 - Events at-least-once; consumers dedup on `event_id`.
+- The ledger enforces overdraft on the debit; the accounts check is advisory except ownership.
