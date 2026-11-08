@@ -53,4 +53,4 @@ Status: todo | in progress | done
 
 | ID | Task | Spec | Branch | PR | Status |
 |----|------|------|--------|----|--------|
-| T-013 | Tasks milestones restructure | - | chore/tasks-milestones | - | in progress |
+| T-013 | Tasks milestones restructure | - | chore/tasks-milestones | [#6](https://github.com/GodwinJacobR/mock-bank/pull/6) | in progress |
