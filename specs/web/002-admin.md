@@ -20,7 +20,7 @@ Admin pages in the web UI to enter data (customers, accounts, funding, bulk tran
 |---|---|---|
 | `GET /admin` | links, counts | `GET /admin/customers`, `GET /admin/accounts` |
 | `GET /admin/customers`, `POST /admin/customers` | list; add form (email, name, password) | `GET|POST /admin/customers` |
-| `GET /admin/accounts`, `POST /admin/accounts` | list (customer, number, currency, status, balance); add form (customer, currency) | `GET|POST /admin/accounts` |
+| `GET /admin/accounts`, `POST /admin/accounts` | list (customer, number, currency, status, balance, as-of; a "verify" action fetches the authoritative ledger balance and flags a mismatch); add form (customer, currency) | `GET|POST /admin/accounts`, `GET /admin/accounts/{id}/balance` (verify) |
 | `POST /admin/fund` | fund an account from treasury (account, amount, currency); hidden idempotency key | `POST /admin/fund` |
 | `GET /admin/bulk` | bulk transfer form | `GET /admin/accounts` |
 | `POST /admin/bulk/preview` | parse input, show item table, nothing sent | none |
@@ -32,7 +32,7 @@ Admin pages in the web UI to enter data (customers, accounts, funding, bulk tran
 - Input B: random generator with count, amount range (min/max), memo prefix and chosen accounts (multi-select; same-currency pairs only, source != destination). Randomness is used in the web admin module only and just produces items; the generated list is frozen into the preview before submit.
 - Preview shows the items and validation errors; submit sends exactly the previewed items.
 - Hidden `batch` id (uuid) generated when the preview is rendered; reused on resubmit and retry, so double clicks or refresh create no duplicates. A new preview gets a new id.
-- Results table: index, status (`created`, `replayed`, `failed`), transfer id, error message. "Retry failed" resubmits the same batch id and items; already created items replay.
+- Results table: index, status (`accepted`, `replayed`, `failed`), transfer id, error message, and the transfer state (`processing`, `done`, `failed`, `reversed`) refreshed by polling `GET /transfers/{id}`. "Retry failed" resubmits the same batch id and items; already accepted items replay.
 - Amounts are decimal strings converted to minor units server-side (no floats).
 - Gateway `401` on admin routes shows a configuration error (bad `ADMIN_TOKEN`), not a login redirect.
 
@@ -40,7 +40,8 @@ Admin pages in the web UI to enter data (customers, accounts, funding, bulk tran
 - `web/001-service`, `gateway/002-admin`
 
 ## Acceptance criteria
-- [ ] Admin can add and list customers and accounts from the UI.
+- [ ] Admin can add and list customers and accounts from the UI; the list shows balance and as-of.
+- [ ] "Verify" shows the ledger balance and highlights a difference from the projection.
 - [ ] Admin can fund an account from treasury; double submit creates one transfer.
 - [ ] Bulk form accepts pasted CSV and JSON; preview shows items and errors without sending.
 - [ ] Random generator produces `count` valid items within the amount range among the chosen accounts.

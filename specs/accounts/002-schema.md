@@ -6,16 +6,16 @@ Status: draft
 Full Postgres DDL, grants and migration conventions for schema `accounts`.
 
 ## Scope (in)
-- Tables: `customers`, `accounts`, `payees`, `sessions`, `outbox`.
+- Tables: `customers`, `accounts`, `payees`, `sessions`, `outbox`, `account_balances` (read-only projection of ledger balances), `processed_events`.
 - Constraints, indexes, grants per DB role.
 - Migration naming.
 
 ## Out of scope
-- Balances and ledger data (`ledger/002-schema`).
+- Authoritative balances and ledger data (`ledger/002-schema`); `account_balances` is a derived copy only.
 - Redis sessions (phase 2; `sessions` table is replaced then).
 
 ## Design
-**Migrations**: `migrations/accounts/NNNN_description.sql` (4-digit zero-padded, increasing; never edited after merge). Phase 1: `0001_init.sql` (all below), `0002_grants.sql`. Run by `accounts_owner` at service start.
+**Migrations**: `migrations/accounts/NNNN_description.sql` (4-digit zero-padded, increasing; never edited after merge). Phase 1: `0001_init.sql` (all below, including `account_balances` and `processed_events`), `0002_grants.sql`. Run by `accounts_owner` at service start.
 
 **Roles**: `accounts_owner` owns the schema and all objects (migrations only). `accounts_svc` is the runtime role.
 
@@ -24,6 +24,7 @@ erDiagram
   customers ||--o{ accounts : owns
   customers ||--o{ payees : saves
   customers ||--o{ sessions : has
+  accounts ||--o| account_balances : projected_as
   customers {
     uuid id PK
     text email UK
@@ -51,6 +52,13 @@ erDiagram
     uuid customer_id FK
     timestamptz created_at
     timestamptz expires_at
+  }
+  account_balances {
+    uuid account_id PK,FK
+    bigint balance_minor
+    bigint last_version
+    timestamptz as_of
+    timestamptz updated_at
   }
   outbox {
     uuid id PK
@@ -113,6 +121,23 @@ CREATE TABLE sessions (
 CREATE INDEX sessions_customer_idx ON sessions (customer_id);
 CREATE INDEX sessions_expires_idx  ON sessions (expires_at);
 
+-- read-only projection of ledger balances, written only by the ledger.postings.v1 consumer
+CREATE TABLE account_balances (
+  account_id    uuid PRIMARY KEY REFERENCES accounts(id),
+  balance_minor bigint      NOT NULL,
+  last_version  bigint      NOT NULL,           -- ledger per-account balance version
+  as_of         timestamptz NOT NULL,           -- posted_at of the last applied posting
+  updated_at    timestamptz NOT NULL DEFAULT now()
+);
+
+-- dedup table for common/004-events-kafka consumers
+CREATE TABLE processed_events (
+  event_id     uuid        NOT NULL,
+  consumer     text        NOT NULL,
+  processed_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (event_id, consumer)
+);
+
 -- standard outbox from common/005-outbox
 CREATE TABLE outbox (
   id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -130,6 +155,7 @@ Notes
 - Accounts are never deleted; closing sets `status='closed'` and `closed_at`. Only `open` to `closed` is allowed (enforced in the service).
 - Expired sessions are treated as missing on read and removed by a periodic `DELETE ... WHERE expires_at < now()`.
 - No treasury or system accounts exist here; they exist only in `ledger` (see `ledger/002-schema`).
+- `account_balances` rows are created on the first posting for an account (no row means balance 0, `as_of` null). The ledger enforces non-negative balances; this table stores what the ledger said. Rows are upserted only when `last_version` increases.
 - Payee `account_number` is not a foreign key: it may refer to an account of another customer, and no cross-customer lookup is exposed.
 
 **Grants** (`0002_grants.sql`)
@@ -140,6 +166,8 @@ GRANT SELECT, INSERT, UPDATE         ON accounts  TO accounts_svc;   -- no DELET
 GRANT SELECT, INSERT                 ON customers TO accounts_svc;   -- no UPDATE/DELETE in phase 1
 GRANT SELECT, INSERT, DELETE         ON payees, sessions TO accounts_svc;
 GRANT SELECT, INSERT, UPDATE         ON outbox    TO accounts_svc;   -- relay marks published
+GRANT SELECT, INSERT, UPDATE         ON account_balances TO accounts_svc;  -- written by the consumer module only
+GRANT SELECT, INSERT                 ON processed_events TO accounts_svc;
 -- no TRUNCATE, no DDL, no access to other schemas
 ```
 
@@ -152,6 +180,8 @@ GRANT SELECT, INSERT, UPDATE         ON outbox    TO accounts_svc;   -- relay ma
 - [ ] Invalid currency, status, or account number format is rejected by CHECK.
 - [ ] `accounts_svc` cannot DELETE from `accounts` or `customers`, run DDL, or touch schema `ledger`.
 - [ ] Outbox partial index exists.
+- [ ] `account_balances.account_id` must reference an existing account; duplicate `(event_id, consumer)` in `processed_events` is rejected.
+- [ ] An upsert with a lower or equal `last_version` leaves the row unchanged.
 
 ## Test plan
 - Integration (testcontainers Postgres): apply migrations; attempt each violating insert; connect as `accounts_svc` and assert denied statements.
