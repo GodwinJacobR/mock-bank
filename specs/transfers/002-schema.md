@@ -70,6 +70,7 @@ CREATE TABLE transfers (
   status            text        NOT NULL DEFAULT 'PENDING',
   failure_code      text,
   failure_message   text,
+  failure_reason    text,                           -- set when a forward step fails; with DEBITED/CREDITED it means: run the undo steps
   attempts          integer     NOT NULL DEFAULT 0,
   created_at        timestamptz NOT NULL DEFAULT now(),
   updated_at        timestamptz NOT NULL DEFAULT now(),
@@ -78,13 +79,13 @@ CREATE TABLE transfers (
   CONSTRAINT transfers_memo_len CHECK (char_length(memo) <= 140),
   CONSTRAINT transfers_role_chk CHECK (initiator_role IN ('customer','admin')),
   CONSTRAINT transfers_status_chk CHECK (status IN
-    ('PENDING','DEBITED','CREDITED','REVERSING','DONE','FAILED','REVERSED')),
+    ('PENDING','DEBITED','CREDITED','DONE','FAILED','REVERSED')),
   CONSTRAINT transfers_failure_chk CHECK (status NOT IN ('FAILED','REVERSED') OR failure_code IS NOT NULL)
 );
 CREATE INDEX transfers_inflight_idx ON transfers (created_at)
-  WHERE status IN ('PENDING','DEBITED','CREDITED','REVERSING');   -- backlog count, stuck sweeps
+  WHERE status IN ('PENDING','DEBITED','CREDITED');   -- backlog count, stuck sweeps
 CREATE INDEX transfers_customer_inflight_idx ON transfers (customer_id)
-  WHERE status IN ('PENDING','DEBITED','CREDITED','REVERSING');   -- per-customer limit
+  WHERE status IN ('PENDING','DEBITED','CREDITED');   -- per-customer limit
 CREATE INDEX transfers_from_idx ON transfers (from_account, created_at DESC, id DESC);
 CREATE INDEX transfers_to_idx   ON transfers (to_account,   created_at DESC, id DESC) WHERE status = 'DONE';
 
@@ -105,9 +106,8 @@ CREATE INDEX outbox_unpublished_idx ON outbox (created_at) WHERE published_at IS
 **Allowed transitions** (trigger in `0001_init.sql`, also checked by the service)
 ```
 PENDING   -> DEBITED | FAILED
-DEBITED   -> CREDITED | REVERSING
+DEBITED   -> CREDITED | REVERSED   (REVERSED only after failure_reason is set and the undo is done)
 CREDITED  -> DONE
-REVERSING -> REVERSED
 DONE, FAILED, REVERSED: final, rows are immutable
 ```
 ```sql
@@ -117,8 +117,8 @@ BEGIN
     RAISE EXCEPTION 'transfer % is final (%)', OLD.id, OLD.status;
   END IF;
   IF NEW.status <> OLD.status AND (OLD.status, NEW.status) NOT IN (
-      ('PENDING','DEBITED'),('PENDING','FAILED'),('DEBITED','CREDITED'),('DEBITED','REVERSING'),
-      ('CREDITED','DONE'),('REVERSING','REVERSED')) THEN
+      ('PENDING','DEBITED'),('PENDING','FAILED'),('DEBITED','CREDITED'),('DEBITED','REVERSED'),
+      ('CREDITED','DONE')) THEN
     RAISE EXCEPTION 'invalid transfer transition % -> %', OLD.status, NEW.status;
   END IF;
   NEW.updated_at := now();

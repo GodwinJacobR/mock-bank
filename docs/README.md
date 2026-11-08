@@ -5,6 +5,7 @@ Diagrams use Mermaid. Specs live in [../specs](../specs/README.md); repo knowled
 - [system-flow.md](system-flow.md): components, async transfer sequence (202, Kafka, saga), saga state diagram.
 - [transfers-backpressure.md](transfers-backpressure.md): what happens when transfers are busy (rate limits, admission control, lag).
 - [transfers-ordering.md](transfers-ordering.md): running instructions in order (saga, compensation, Kafka key per account).
+- [saga-worker-pattern.md](saga-worker-pattern.md): worker loop, crash/resume, and the generic saga model.
 
 Transfers are a separate service ([specs/transfers](../specs/transfers/001-service.md)); the ledger only does postings. The client gets `202` and reads the result by polling or SSE.
 

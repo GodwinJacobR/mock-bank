@@ -72,14 +72,14 @@ stateDiagram-v2
   PENDING --> DEBITED: ledger debit ok
   DEBITED --> CREDITED: ledger credit ok
   CREDITED --> DONE: finalize
-  DEBITED --> REVERSING: credit rejected
-  REVERSING --> REVERSED: debit undone
+  DEBITED --> DEBITED: credit rejected (failure_reason set)
+  DEBITED --> REVERSED: debit undone
   DONE --> [*]
   FAILED --> [*]
   REVERSED --> [*]
 ```
 
-The state is saved in `transfers.transfers`, so a crashed worker resumes from the saved state. `REVERSING` is an internal state so a crash during compensation resumes into the undo.
+The state is saved in `transfers.transfers`, so a crashed worker resumes from the saved state. There is no internal reversing state: a worker that resumes and finds `DEBITED` (or `CREDITED`) with `failure_reason` set runs the undo steps in reverse. See [saga-worker-pattern.md](saga-worker-pattern.md).
 
 ## Account page
 

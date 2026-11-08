@@ -38,7 +38,7 @@ sequenceDiagram
   W->>DB: DEBITED
   W->>L: credit transit to destination (key id-credit)
   L-->>W: rejected (account_closed)
-  W->>DB: REVERSING
+  W->>DB: DEBITED + failure_reason (credit rejected)
   W->>L: undo debit (key id-debit-undo)
   L-->>W: ok
   W->>DB: REVERSED + transfer.reversed

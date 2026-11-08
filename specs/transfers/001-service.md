@@ -31,7 +31,7 @@ Trade-off: the client no longer gets an instant success or failure. `POST /trans
   - Body is validated syntactically (amount > 0, memo <= 140, currency format) -> `400`/`422`. No call to other services on this path.
   - Same `(customer, key)` + same request hash -> `202` with the same `transfer_id` and its current status (no second transfer, no second command). Same key + different body -> `422 idempotency_conflict`.
   - Over the backlog limits -> `503 overloaded` or `429 too_many_in_flight` with `Retry-After` (Admission control).
-- `GET /transfers/{id}` -> `200 {id, status, state, from_account_id, to_account_number, amount_minor, currency, memo, failure_code?, failure_message?, created_at, updated_at}`. `state` is `processing` (`PENDING`, `DEBITED`, `CREDITED`, `REVERSING`) or final (`done`, `failed`, `reversed`). Owner or admin; else `404`.
+- `GET /transfers/{id}` -> `200 {id, status, state, from_account_id, to_account_number, amount_minor, currency, memo, failure_code?, failure_message?, created_at, updated_at}`. `state` is `processing` (`PENDING`, `DEBITED`, `CREDITED`) or final (`done`, `failed`, `reversed`). Owner or admin; else `404`.
 - `GET /transfers/{id}/events` -> `text/event-stream`. First event is the current state (read from the DB, so nothing is missed), then one SSE event per `transfer.*` event for that transfer; the stream closes after a final state. Heartbeat comment every 15 s; max stream age 5 min (the client reconnects and gets the current state again).
 - `GET /accounts/{id}/transfers?limit=&before=` -> `200 [{id, direction, counterparty, amount_minor, currency, memo, state, created_at}]` (owner only; includes in-flight transfers with their `state`).
 
@@ -50,8 +50,8 @@ stateDiagram-v2
   PENDING --> DEBITED: ledger debit ok
   DEBITED --> CREDITED: ledger credit ok
   CREDITED --> DONE: finalize
-  DEBITED --> REVERSING: credit rejected
-  REVERSING --> REVERSED: debit undone
+  DEBITED --> DEBITED: credit rejected (failure_reason set)
+  DEBITED --> REVERSED: debit undone
   DONE --> [*]
   FAILED --> [*]
   REVERSED --> [*]
@@ -60,14 +60,14 @@ stateDiagram-v2
 Steps, in order
 1. **Pre-check (advisory, fast)**: accounts `GET /accounts/{id}` as the customer (source must be owned and open) and `GET /accounts/resolve?account_number=` (destination exists, open, same currency, not the source). Stores the resolved `to_account` id. A failure -> `FAILED` with `failure_code` (`account_not_found`, `account_closed`, `currency_mismatch`, `same_account`). Ownership is the only mandatory part: the ledger does not check customer ownership for postings from the `service` role. Funds and status are rechecked authoritatively by the ledger, so a stale pre-check does no harm. If accounts is unreachable the step is retried with backoff, then the transfer fails with `unavailable`.
 2. **Debit**: ledger `POST /postings` customer account -> `bank:transit:<CUR>`, key `{transfer_id}-debit`, `initiator_role` copied from the row. Success -> `DEBITED`. `422 insufficient_funds` (the authoritative overdraft check) or another business rejection -> `FAILED`; nothing to undo.
-3. **Credit**: ledger `POST /postings` `bank:transit:<CUR>` -> destination, key `{transfer_id}-credit`. Success -> `CREDITED`. Business rejection (`account_closed`, `currency_mismatch`) -> `REVERSING`.
+3. **Credit**: ledger `POST /postings` `bank:transit:<CUR>` -> destination, key `{transfer_id}-credit`. Success -> `CREDITED`. Business rejection (`account_closed`, `currency_mismatch`) -> the row stays `DEBITED` with `failure_reason` set (saved in the same transaction), then step 5 runs.
 4. **Finalize**: `CREDITED` -> `DONE`, emits `transfer.completed`.
-5. **Compensation** (`REVERSING`): ledger `POST /postings` transit -> original source, key `{transfer_id}-debit-undo`, then `REVERSED` (emits `transfer.reversed`). Reversal is a new posting, never a delete (ledger entries are append-only).
+5. **Compensation** (state `DEBITED` or `CREDITED` with `failure_reason` set; undo steps run in reverse order): ledger `POST /postings` transit -> original source, key `{transfer_id}-debit-undo`, then `REVERSED` (emits `transfer.reversed`). Reversal is a new posting, never a delete (ledger entries are append-only).
 
-`REVERSING` is the one internal state added to the list `PENDING, DEBITED, CREDITED, DONE, FAILED, REVERSED`, so a crash during compensation resumes into the undo instead of retrying the credit.
+There is no separate compensation state. States are `PENDING, DEBITED, CREDITED, DONE, FAILED, REVERSED`. A worker that resumes and finds `DEBITED` (or `CREDITED`) with `failure_reason` set runs the undo steps instead of the forward steps, so a crash during compensation resumes into the undo and never retries the credit. Undo keys are idempotent (`{transfer_id}-debit-undo`).
 
 Failure handling
-- Transient errors (timeout, `5xx`, `409 account_not_ready`) are retried with the same idempotency key: exponential backoff with jitter, `SAGA_MAX_ATTEMPTS` (default 5, about 30 s) for forward steps. After that the forward step counts as a business failure: before the debit -> `FAILED` (`unavailable`); after the debit -> `REVERSING`.
+- Transient errors (timeout, `5xx`, `409 account_not_ready`) are retried with the same idempotency key: exponential backoff with jitter, `SAGA_MAX_ATTEMPTS` (default 5, about 30 s) for forward steps. After that the forward step counts as a business failure: before the debit -> `FAILED` (`unavailable`); after the debit -> `failure_reason` set, undo runs.
 - The undo is retried without limit (backoff capped at 30 s) and holds its partition, since money is in transit. It raises an alert (`transfers_reversal_stuck`).
 - Crash at any point: the offset was not committed, the command is redelivered, the worker loads the row and resumes from its saved `status`. The same ledger key makes a repeated call a replay (`ledger/001`: same key + same body returns the stored response), so a debit is never applied twice.
 - Poison commands (row missing or corrupt) go to `transfers.commands.dlq.v1`.
@@ -85,7 +85,7 @@ Failure handling
 Layers, outermost first
 1. Gateway: Redis token bucket per user and per IP -> `429` with `Retry-After` (`gateway/001-service`, `platform/003-scale-and-portability`).
 2. Transfers admission, checked before the insert on `POST /transfers`:
-   - global backlog (count of non-final transfers: `PENDING`, `DEBITED`, `CREDITED`, `REVERSING`) above `TRANSFERS_MAX_BACKLOG` (default 10000) -> `503 overloaded`;
+   - global backlog (count of non-final transfers: `PENDING`, `DEBITED`, `CREDITED`) above `TRANSFERS_MAX_BACKLOG` (default 10000) -> `503 overloaded`;
    - consumer lag of group `transfers-workers` on `transfers.commands.v1` above `TRANSFERS_MAX_LAG` (default 5000), sampled every second -> `503 overloaded`;
    - per-customer in-flight above `TRANSFERS_MAX_PER_CUSTOMER` (default 50) -> `429 too_many_in_flight`.
    `Retry-After` is in seconds, estimated from backlog / recent completion rate (minimum 1). Nothing is written when rejected, so retrying with the same key is safe.
