@@ -1,6 +1,6 @@
 # mock-bank
 
-A mock bank for learning, written in Rust and run locally with Docker Compose. Customers log in, see accounts and balances, and send transfers. Transfers are handled asynchronously as sagas: a transfer is accepted, queued, then moved step by step (debit, credit, done), with a reversal if a step fails.
+A mock bank, written in Rust and run locally with Docker Compose. Customers log in, see accounts and balances, and send transfers. Transfers are handled asynchronously as sagas: a transfer is accepted, queued, then moved step by step (debit, credit, done), with a reversal if a step fails.
 
 Spec-driven: every feature has a spec in `specs/` before code.
 
