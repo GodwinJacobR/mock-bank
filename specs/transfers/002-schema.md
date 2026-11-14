@@ -43,7 +43,7 @@ erDiagram
     uuid saga_id PK "= transfers.id"
     text type
     text status
-    int step_index
+    text current_step "step name, e.g. debit, debit:undo"
     jsonb context
     text failure_reason
     timestamptz deadline
@@ -66,7 +66,7 @@ erDiagram
     text last_error
   }
 ```
-`(customer_id, idempotency_key)` is unique. `from_account` and `to_account` are ids from the accounts service with no foreign key (other schema); `to_account` is set by the start-time destination lookup. `sagas.saga_id` equals `transfers.id` (inserted in the same transaction). `sagas` holds progress (`status`, `step_index`), `context`, `failure_reason` and the reply `deadline`; `transfers` holds business fields and a mirror `status`. `saga_steps` is the append-only step history of a saga (`saga_id` has no foreign key, rows are never updated or deleted). `outbox` is standalone; it holds the commands to `accounts.commands` (key = `saga_id`) and the `transfer.*` events; unsent rows are those with `published_at IS NULL`.
+`(customer_id, idempotency_key)` is unique. `from_account` and `to_account` are ids from the accounts service with no foreign key (other schema); `to_account` is set by the start-time destination lookup. `sagas.saga_id` equals `transfers.id` (inserted in the same transaction). `sagas` holds progress (`status`, `current_step`), `context`, `failure_reason` and the reply `deadline`; `transfers` holds business fields and a mirror `status`. `saga_steps` is the append-only step history of a saga (`saga_id` has no foreign key, rows are never updated or deleted). `outbox` is standalone; it holds the commands to `accounts.commands` (key = `saga_id`) and the `transfer.*` events; unsent rows are those with `published_at IS NULL`.
 
 **DDL** (`0001_init.sql`)
 ```sql
@@ -110,7 +110,7 @@ CREATE TABLE sagas (
   saga_id        uuid        PRIMARY KEY,
   type           text        NOT NULL,
   status         text        NOT NULL DEFAULT 'RUNNING',
-  step_index     integer     NOT NULL DEFAULT 0,
+  current_step   text        NOT NULL,
   context        jsonb       NOT NULL,
   failure_reason text,
   deadline       timestamptz,
@@ -167,7 +167,7 @@ END $$;
 CREATE TRIGGER transfers_transition BEFORE UPDATE ON transfers
   FOR EACH ROW EXECUTE FUNCTION check_transfer_transition();
 ```
-Updates that keep the status are allowed until the row is final. Saga progress (`status`, `step_index`, `failure_reason`, `deadline`) lives in `sagas`; its rules are owned by the runner (`common/006-saga`).
+Updates that keep the status are allowed until the row is final. Saga progress (`status`, `current_step`, `failure_reason`, `deadline`) lives in `sagas`; its rules are owned by the runner (`common/006-saga`).
 
 **Grants** (`0002_grants.sql`)
 ```sql
@@ -187,7 +187,7 @@ GRANT SELECT, INSERT ON saga_steps TO transfers_svc;   -- append-only
 - [ ] An invalid status value or a transition outside the allowed list (e.g. `PENDING -> DONE`, `DEBITED -> PENDING`, `FAILED -> DEBITED`) is rejected; a final row cannot be updated.
 - [ ] `FAILED`/`REVERSED` rows without `failure_code` are rejected.
 - [ ] A `sagas` row with a status outside `RUNNING|COMPENSATING|COMPLETED|REVERSED|FAILED` is rejected.
-- [ ] Rows in `sagas` carry `step_index`, `context` and a nullable `deadline`; the sweeper indexes (`sagas_active_idx`, `sagas_deadline_idx`) exist.
+- [ ] Rows in `sagas` carry `current_step` (text, not null), `context` and a nullable `deadline`; the sweeper indexes (`sagas_active_idx`, `sagas_deadline_idx`) exist.
 - [ ] Unsent outbox rows are exactly those with `published_at IS NULL` (partial index `outbox_unpublished_idx`); `attempts` and `last_error` are kept.
 - [ ] A `saga_steps` row with a status outside `started|done|failed|compensated` is rejected; `transfers_svc` cannot UPDATE or DELETE `saga_steps` rows.
 - [ ] `transfers_svc` cannot DELETE/TRUNCATE, run DDL, or access schemas `accounts` or `ledger`.
