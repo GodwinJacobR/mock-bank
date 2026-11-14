@@ -5,7 +5,7 @@ Status: draft. All data is synthetic. Runs locally via Docker Compose.
 ## 1. Goals and non-goals
 
 Goals
-- Learn Rust (axum, sqlx, tokio), Kafka, Redis, Postgres, vector search and AI by building a small but realistic bank.
+- Build a small but realistic bank with Rust (axum, sqlx, tokio), Kafka, Redis, Postgres, vector search and AI.
 - Correct money handling: double-entry ledger, idempotent writes, no lost events.
 - Everything starts with `docker compose up`.
 
