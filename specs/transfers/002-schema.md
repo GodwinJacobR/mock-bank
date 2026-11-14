@@ -6,7 +6,7 @@ Status: draft
 Postgres DDL, grants and constraints for schema `transfers`.
 
 ## Scope (in)
-- Tables: `transfers`, `sagas` (standard DDL from `common/006-saga`), `outbox`.
+- Tables: `transfers`, `sagas` and `saga_steps` (standard DDL from `common/006-saga`), `outbox`.
 - Constraints, indexes, grants per DB role, allowed status transitions.
 - Migration naming.
 
@@ -48,6 +48,13 @@ erDiagram
     jsonb payload
     timestamptz updated_at
   }
+  saga_steps {
+    uuid saga_id
+    text step
+    text status
+    timestamptz ts
+    jsonb payload
+  }
   outbox {
     uuid id PK
     text topic
@@ -56,7 +63,7 @@ erDiagram
     timestamptz published_at
   }
 ```
-`(customer_id, idempotency_key)` is unique. `from_account` and `to_account` are ids from the accounts service with no foreign key (other schema); `to_account` is set by the pre-check. `sagas.saga_id` equals `transfers.id` (inserted in the same transaction). `sagas` holds progress and `failure_reason`; `transfers` holds business fields and a mirror `status`. `outbox` is standalone.
+`(customer_id, idempotency_key)` is unique. `from_account` and `to_account` are ids from the accounts service with no foreign key (other schema); `to_account` is set by the pre-check. `sagas.saga_id` equals `transfers.id` (inserted in the same transaction). `sagas` holds progress and `failure_reason`; `transfers` holds business fields and a mirror `status`. `saga_steps` is the append-only step history of a saga (`saga_id` has no foreign key, rows are never updated or deleted). `outbox` is standalone.
 
 **DDL** (`0001_init.sql`)
 ```sql
@@ -108,6 +115,17 @@ CREATE TABLE sagas (
 );
 CREATE INDEX sagas_active_idx ON sagas (updated_at) WHERE status = 'IN_PROGRESS';
 
+-- standard append-only step history from common/006-saga
+CREATE TABLE saga_steps (
+  saga_id uuid        NOT NULL,
+  step    text        NOT NULL,
+  status  text        NOT NULL,
+  ts      timestamptz NOT NULL DEFAULT now(),
+  payload jsonb,
+  CONSTRAINT saga_steps_status_chk CHECK (status IN ('started','done','failed','compensated'))
+);
+CREATE INDEX saga_steps_saga_idx ON saga_steps (saga_id, ts);
+
 -- standard outbox from common/005-outbox
 CREATE TABLE outbox (
   id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -153,11 +171,12 @@ Updates that keep the status are allowed until the row is final. Saga progress (
 REVOKE ALL ON SCHEMA transfers FROM PUBLIC;
 GRANT USAGE ON SCHEMA transfers TO transfers_svc;
 GRANT SELECT, INSERT, UPDATE ON transfers, sagas, outbox TO transfers_svc;
+GRANT SELECT, INSERT ON saga_steps TO transfers_svc;   -- append-only
 -- no DELETE/TRUNCATE; no DDL; no access to schemas accounts or ledger
 ```
 
 ## Dependencies
-- `platform/002-workspace-and-compose` (roles), `common/005-outbox` (outbox DDL), `common/006-saga` (sagas DDL).
+- `platform/002-workspace-and-compose` (roles), `common/005-outbox` (outbox DDL), `common/006-saga` (sagas and saga_steps DDL).
 
 ## Acceptance criteria
 - [ ] Migrations apply on an empty database as `transfers_owner`.
@@ -165,6 +184,7 @@ GRANT SELECT, INSERT, UPDATE ON transfers, sagas, outbox TO transfers_svc;
 - [ ] An invalid status value or a transition outside the allowed list (e.g. `PENDING -> DONE`, `FAILED -> DEBITED`) is rejected; a final row cannot be updated.
 - [ ] `FAILED`/`REVERSED` rows without `failure_code` are rejected.
 - [ ] A `sagas` row with a status outside `IN_PROGRESS|DONE|FAILED|REVERSED` is rejected.
+- [ ] A `saga_steps` row with a status outside `started|done|failed|compensated` is rejected; `transfers_svc` cannot UPDATE or DELETE `saga_steps` rows.
 - [ ] `transfers_svc` cannot DELETE/TRUNCATE, run DDL, or access schemas `accounts` or `ledger`.
 
 ## Test plan

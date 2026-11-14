@@ -81,6 +81,7 @@ Failure handling and crash recovery are those of `common/006-saga`, with these t
 - The undo retries without limit (backoff capped at 30 s) and holds its partition, since money is in transit. It raises `transfers_reversal_stuck`.
 - A repeated ledger call with the same key is a replay (`ledger/001`: same key + same body returns the stored response), so a debit is never applied twice, at any of the 3 crash points.
 - The sweeper re-enqueues `transfer` sagas that stay `IN_PROGRESS` with a stale `updated_at` onto `transfers.commands.v1`.
+- Each step is recorded in the append-only `saga_steps` table (`common/006-saga`); the history of a transfer is `SELECT * FROM saga_steps WHERE saga_id = $transfer_id ORDER BY ts`.
 - Poison commands (saga or transfer row missing or corrupt) go to `transfers.commands.dlq.v1`.
 
 **Idempotency keys**
@@ -127,6 +128,8 @@ Metrics: backlog, consumer lag, transfers/s by final state, saga step latency, t
 - [ ] Not owning the source account ends `FAILED` and the ledger is never called.
 - [ ] Credit rejection (destination closed after the pre-check) ends `REVERSED`: the source balance is restored by the `{transfer_id}-debit-undo` posting.
 - [ ] Killing a worker after the debit and before the credit, then restarting, ends `DONE` with one debit and one credit posting; the same holds for a crash at each of the 3 crash points of `common/006-saga`.
+- [ ] The step history of a transfer is returned in order from `saga_steps` (including `compensated` rows for a `REVERSED` one).
+- [ ] Every log line and span for a transfer carries `saga_id` (= `transfer_id`).
 - [ ] A transfer saga left `IN_PROGRESS` with a stale `updated_at` is re-enqueued by the sweeper and finishes.
 - [ ] Creating a transfer writes the `transfers` row, the `sagas` row and the outbox rows in one transaction.
 - [ ] Every ledger call uses key `{transfer_id}-{step}` or `{transfer_id}-{step}-undo`.

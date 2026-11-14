@@ -9,6 +9,7 @@ Library crate `common/saga` (`bank-saga`): a reusable runner for multi-step work
 - Step definition, generic `sagas` state table DDL, the runner loop, failure handling, crash recovery (sweeper, row lock).
 - Integration with Kafka consumers (`common/004-events-kafka`) and the outbox (`common/005-outbox`).
 - Metrics hooks.
+- Step history table (`saga_steps`) and `saga_id` on logs and trace spans.
 
 ## Out of scope
 - Business logic of any step (owned by the service defining the saga type).
@@ -46,6 +47,22 @@ CREATE TABLE sagas (
 );
 CREATE INDEX sagas_active_idx ON sagas (updated_at) WHERE status = 'IN_PROGRESS';  -- sweeper
 ```
+**Step history** (`saga_steps`, append-only, part of the standard DDL)
+```sql
+CREATE TABLE saga_steps (
+  saga_id uuid        NOT NULL,
+  step    text        NOT NULL,                        -- action or undo step name
+  status  text        NOT NULL,
+  ts      timestamptz NOT NULL DEFAULT now(),
+  payload jsonb,
+  CONSTRAINT saga_steps_status_chk CHECK (status IN ('started','done','failed','compensated'))
+);
+CREATE INDEX saga_steps_saga_idx ON saga_steps (saga_id, ts);
+```
+- Rows are only inserted, never updated or deleted (the runtime role has no UPDATE/DELETE). The runner appends `started`, then `done` or `failed` for a forward step, and `compensated` for an undo, in the same transaction as the `sagas` update (step 6 below).
+- History of one saga: `SELECT * FROM saga_steps WHERE saga_id = $1 ORDER BY ts;`
+- `sagas` stays the current-state row; `saga_steps` is the audit trail.
+
 - `status` final values: `DONE` (all steps ran), `FAILED` (failed with nothing to undo), `REVERSED` (failed and the done steps were undone). Final rows are immutable.
 - `failure_reason` set with `IN_PROGRESS` means: run the undo steps, not the forward steps. There is no separate compensating status.
 - Services keep business fields in their own tables and link by `saga_id` (for transfers, `saga_id = transfer_id`).
@@ -57,7 +74,7 @@ CREATE INDEX sagas_active_idx ON sagas (updated_at) WHERE status = 'IN_PROGRESS'
 4. Pick the step: forward (next step after `current_step`) or, if `failure_reason` is set, the next undo (the latest completed step that has an undo).
 5. Run the step with its key. Calls are idempotent, so running inside the open transaction is safe; the lock is held only for the call's timeout (every call has one).
 6. Update the row in the same transaction: `current_step`, `status`, `failure_reason`, `payload`, `updated_at`. A per-type hook runs in this transaction to update business tables and `outbox::enqueue` events. Commit.
-7. Repeat from 2 until the status is final, then **commit the Kafka offset last**.
+7. Repeat from 2 until the status is final, then **commit the Kafka offset last** (ack after the step is committed; a pod that dies before this gets the command redelivered).
 
 **Failure handling**
 - Transient error (timeout, `5xx`, retriable codes): retry the same step with the same key, exponential backoff with jitter, up to `max_attempts`. The row lock is released between attempts.
@@ -79,6 +96,8 @@ CREATE INDEX sagas_active_idx ON sagas (updated_at) WHERE status = 'IN_PROGRESS'
 
 **Config**: `SAGA_MAX_ATTEMPTS` (default 5, about 30 s total), `SAGA_STALE_AFTER` (default 60 s), `SAGA_SWEEP_INTERVAL` (default 15 s), `SAGA_UNDO_MAX_BACKOFF` (default 30 s).
 
+**Observability**: every log line and trace span written while handling a saga carries `saga_id` (plus `type` and `step`), via a tracing span opened by the runner per command (`common/003-telemetry`).
+
 **Metrics**: step latency and attempts by type/step, sagas by final status, in-progress count, oldest in-progress age, sweeper re-enqueues, `saga_undo_stuck` gauge.
 
 ## Dependencies
@@ -94,7 +113,9 @@ CREATE INDEX sagas_active_idx ON sagas (updated_at) WHERE status = 'IN_PROGRESS'
 - [ ] Two workers on one saga never run a step concurrently (row lock).
 - [ ] The sweeper re-enqueues an `IN_PROGRESS` saga with stale `updated_at` and ignores final or fresh ones.
 - [ ] The offset is committed only after the saved row is final.
+- [ ] `saga_steps` is append-only and the history query returns every step of a saga in order, including `compensated` rows after an undo.
+- [ ] The same `saga_id` appears in every log line and span for a saga.
 
 ## Test plan
 - Unit: step ordering, undo selection, backoff schedule, step-list validation.
-- Integration (testcontainers Postgres + Kafka, stub callees): happy path, transient then success, permanent with undo, fault injection at each crash point, concurrent workers on one saga, sweeper.
+- Integration (testcontainers Postgres + Kafka, stub callees): happy path, transient then success, permanent with undo, fault injection at each crash point, concurrent workers on one saga, sweeper, kill-mid-step (worker killed during a step, restarted: one effect, saga final), `saga_steps` history and append-only grant.
