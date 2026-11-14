@@ -8,6 +8,12 @@ The context that records postings against accounts as the book of record for mon
 A place where postings accumulate, including non-customer accounts such as the treasury. Linked to a Bank Account only by ID.
 _Avoid_: Account
 
+**Frozen** (Ledger Account):
+The Ledger Account state in which the Ledger rejects every Posting to it. Mirrors a Frozen Bank Account.
+
+**Closed** (Ledger Account):
+The terminal Ledger Account state in which the Ledger rejects every Posting to it. Mirrors a Closed Bank Account.
+
 **Currency**:
 The single unit of money a Ledger Account is denominated in. All Postings on a Ledger Account, and all Postings in a Journal Entry, share one Currency.
 _Avoid_: Denomination

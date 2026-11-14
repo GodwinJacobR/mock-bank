@@ -17,10 +17,10 @@ A label on a Bank Account naming its kind (for example checking or savings). It 
 _Avoid_: Account type, Plan
 
 **Open**:
-The Bank Account status in which it can send and receive Transfers.
+The Bank Account status in which it can send Transfers and receive Bank Deposits.
 
 **Frozen**:
-The Bank Account status, set by an admin, in which it can neither send nor receive Transfers.
+The Bank Account status, set by an admin, in which it can neither send Transfers nor receive Bank Deposits.
 
 **Closed**:
 The terminal Bank Account status. A Bank Account can only be Closed when its Balance is zero and it has no active Holds.
