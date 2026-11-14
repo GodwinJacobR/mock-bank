@@ -47,7 +47,7 @@ Own customers, accounts, payees and login sessions; publish account events; exec
 - Group `accounts-commands`; commands are keyed by `saga_id`. Command `{saga_id, step, cmd, account, amount, idempotency_key}` with `cmd` in `debit`, `credit`, `undo_debit`.
 - Dedupe by `idempotency_key`: the key and the stored reply are recorded with the command result. A seen key re-sends the stored reply and applies nothing again.
 - Otherwise, in order: call ledger `POST /postings` as `role = service` (debit: account to `bank:transit:<CUR>`; credit: transit to account; undo_debit: transit to the original account) using the command's `idempotency_key` as the posting key; record the result; publish the reply to `accounts.replies` (key = `saga_id`, payload `{saga_id, step, result, code}`, `result` `ok` or `failed`, `code` the business reason such as `insufficient_funds`, `account_closed`); then commit the command offset. The offset is committed only after the reply is published, so a crash redelivers the command and the dedupe makes it safe.
-- Late action: a `debit` whose `debit:undo` key was already seen is rejected with reply `failed`, code `compensated`, and no posting. An `undo_debit` for a debit that was never applied is recorded and answered `ok` with no effect (and blocks a later debit of the same saga).
+- Late action: a `debit` is rejected, when a `saga_commands` row with the same `saga_id` and step `debit:undo` exists, with reply `failed`, code `compensated`, and no posting. A `debit:undo` (cmd `undo_debit`) for a debit that was never applied is recorded and answered `ok` with no effect (and blocks a later debit of the same saga).
 - Retriable ledger errors (`409 account_not_ready`, timeouts) are retried by the consumer without replying; business errors (`422`) become `failed` replies.
 
 **Balance projection** (eventually consistent, read-only)
@@ -85,7 +85,7 @@ Own customers, accounts, payees and login sessions; publish account events; exec
 - [ ] A `debit` command moves funds to transit via one ledger posting and publishes an `ok` reply on `accounts.replies` keyed by `saga_id`; an overdraft yields a `failed` reply with `insufficient_funds`.
 - [ ] A command redelivered with the same `idempotency_key` re-sends the stored reply and creates no second posting.
 - [ ] The command offset is committed only after the reply is published (a crash between them redelivers; no double effect).
-- [ ] A `debit` whose `debit:undo` key was already seen is rejected (`failed`, `compensated`) with no posting.
+- [ ] A `debit` whose saga already has a `debit:undo` row in `saga_commands` is rejected (`failed`, `compensated`) with no posting.
 - [ ] An `undo_debit` for a never-applied debit answers `ok` with no effect.
 - [ ] Metric `accounts_balance_projection_lag_seconds` is exported and the alert rule fires when the consumer is stopped.
 
