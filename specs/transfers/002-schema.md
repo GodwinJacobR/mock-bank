@@ -6,7 +6,8 @@ Status: draft
 Postgres DDL, grants and constraints for schema `transfers`.
 
 ## Scope (in)
-- Tables: `transfers`, `sagas` (standard DDL from `common/006-saga`), `outbox`.
+- Tables owned by transfers: `transfers`, `outbox` (events).
+- Tables created by the saga library migration (`common/006-saga`, `saga::migrate`): `sagas`, `saga_steps`, `saga_outbox`; listed here for roles and grants.
 - Constraints, indexes, grants per DB role, allowed status transitions.
 - Migration naming.
 
@@ -15,7 +16,7 @@ Postgres DDL, grants and constraints for schema `transfers`.
 - Customers, accounts (`accounts/002-schema`).
 
 ## Design
-**Migrations**: `migrations/transfers/NNNN_description.sql` (4-digit zero-padded; never edited after merge). `0001_init.sql` (tables, transition trigger), `0002_grants.sql`. Run by the `transfers migrate` job as `transfers_owner` (`platform/002-workspace-and-compose`).
+**Migrations**: `migrations/transfers/NNNN_description.sql` (4-digit zero-padded; never edited after merge). `0001_init.sql` (transfers tables, transition trigger), `0002_grants.sql`. Run by the `transfers migrate` job as `transfers_owner` (`platform/002-workspace-and-compose`). The saga tables are not in these files: the job first calls `saga::migrate(&pool, &Config { schema: Some("transfers"), table_prefix: "", .. })` (library embedded migrations, recorded in the library's own migrations table), which creates `sagas`, `saga_steps` and `saga_outbox` in schema `transfers`. The schema/prefix config keeps the names from colliding with other services' sets. `0002_grants.sql` runs after it.
 
 **Roles**: `transfers_owner` owns the schema (migrations only). `transfers_svc` is the runtime role; it has no privilege on schemas `accounts` or `ledger`.
 
@@ -42,11 +43,28 @@ erDiagram
   sagas {
     uuid saga_id PK "= transfers.id"
     text type
-    text current_step
     text status
+    text current_step "step name, e.g. debit, debit:undo"
+    jsonb context
     text failure_reason
-    jsonb payload
+    timestamptz deadline
     timestamptz updated_at
+  }
+  saga_steps {
+    uuid saga_id
+    text step
+    text status
+    timestamptz ts
+    jsonb payload
+  }
+  saga_outbox {
+    uuid id PK
+    text topic
+    text key
+    jsonb payload
+    timestamptz published_at
+    int attempts
+    text last_error
   }
   outbox {
     uuid id PK
@@ -54,9 +72,11 @@ erDiagram
     text key
     jsonb payload
     timestamptz published_at
+    int attempts
+    text last_error
   }
 ```
-`(customer_id, idempotency_key)` is unique. `from_account` and `to_account` are ids from the accounts service with no foreign key (other schema); `to_account` is set by the pre-check. `sagas.saga_id` equals `transfers.id` (inserted in the same transaction). `sagas` holds progress and `failure_reason`; `transfers` holds business fields and a mirror `status`. `outbox` is standalone.
+`(customer_id, idempotency_key)` is unique. `from_account` and `to_account` are ids from the accounts service with no foreign key (other schema); `to_account` is set by the start-time destination lookup. `sagas.saga_id` equals `transfers.id` (inserted in the same transaction). `sagas` holds progress (`status`, `current_step`), `context`, `failure_reason` and the reply `deadline`; `transfers` holds business fields and a mirror `status`. `saga_steps` is the append-only step history of a saga (`saga_id` has no foreign key, rows are never updated or deleted). `outbox` is standalone and holds the `transfer.*` events; `saga_outbox` (library, `outbox` feature) holds the commands to `accounts.commands` (key = `saga_id`); unsent rows in both are those with `published_at IS NULL`.
 
 **DDL** (`0001_init.sql`)
 ```sql
@@ -71,7 +91,7 @@ CREATE TABLE transfers (
   initiator_role    text        NOT NULL,
   from_account      uuid        NOT NULL,
   to_account_number text        NOT NULL,
-  to_account        uuid,                           -- set by the pre-check
+  to_account        uuid,                           -- set by the start-time destination lookup
   amount_minor      bigint      NOT NULL,
   currency          char(3)     NOT NULL,
   memo              text        NOT NULL DEFAULT '',
@@ -85,30 +105,46 @@ CREATE TABLE transfers (
   CONSTRAINT transfers_memo_len CHECK (char_length(memo) <= 140),
   CONSTRAINT transfers_role_chk CHECK (initiator_role IN ('customer','admin')),
   CONSTRAINT transfers_status_chk CHECK (status IN
-    ('PENDING','DEBITED','CREDITED','DONE','FAILED','REVERSED')),
+    ('PENDING','DEBITED','DONE','FAILED','REVERSED')),
   CONSTRAINT transfers_failure_chk CHECK (status NOT IN ('FAILED','REVERSED') OR failure_code IS NOT NULL)
 );
 CREATE INDEX transfers_inflight_idx ON transfers (created_at)
-  WHERE status IN ('PENDING','DEBITED','CREDITED');   -- backlog count, stuck sweeps
+  WHERE status IN ('PENDING','DEBITED');   -- backlog count
 CREATE INDEX transfers_customer_inflight_idx ON transfers (customer_id)
-  WHERE status IN ('PENDING','DEBITED','CREDITED');   -- per-customer limit
+  WHERE status IN ('PENDING','DEBITED');   -- per-customer limit
 CREATE INDEX transfers_from_idx ON transfers (from_account, created_at DESC, id DESC);
 CREATE INDEX transfers_to_idx   ON transfers (to_account,   created_at DESC, id DESC) WHERE status = 'DONE';
 
--- standard saga state table from common/006-saga; saga_id = transfers.id
+-- Reference only: sagas, saga_steps and saga_outbox are created by saga::migrate (common/006-saga), NOT by 0001_init.sql.
+-- Resulting DDL in schema transfers (no prefix); saga_id = transfers.id (= the command key namespace)
 CREATE TABLE sagas (
   saga_id        uuid        PRIMARY KEY,
   type           text        NOT NULL,
+  status         text        NOT NULL DEFAULT 'RUNNING',
   current_step   text        NOT NULL,
-  status         text        NOT NULL DEFAULT 'IN_PROGRESS',
+  context        jsonb       NOT NULL,
   failure_reason text,
-  payload        jsonb       NOT NULL,
+  deadline       timestamptz,
   updated_at     timestamptz NOT NULL DEFAULT now(),
-  CONSTRAINT sagas_status_chk CHECK (status IN ('IN_PROGRESS','DONE','FAILED','REVERSED'))
+  CONSTRAINT sagas_status_chk CHECK (status IN ('RUNNING','COMPENSATING','COMPLETED','REVERSED','FAILED'))
 );
-CREATE INDEX sagas_active_idx ON sagas (updated_at) WHERE status = 'IN_PROGRESS';
+CREATE INDEX sagas_active_idx ON sagas (updated_at) WHERE status IN ('RUNNING','COMPENSATING');
+CREATE INDEX sagas_deadline_idx ON sagas (deadline) WHERE deadline IS NOT NULL;
 
--- standard outbox from common/005-outbox
+-- append-only step history (library)
+CREATE TABLE saga_steps (
+  saga_id uuid        NOT NULL,
+  step    text        NOT NULL,
+  status  text        NOT NULL,
+  ts      timestamptz NOT NULL DEFAULT now(),
+  payload jsonb,
+  CONSTRAINT saga_steps_status_chk CHECK (status IN ('started','done','failed','compensated'))
+);
+CREATE INDEX saga_steps_saga_idx ON saga_steps (saga_id, ts);
+
+-- saga_outbox (library, feature outbox) has the same columns as outbox below, index saga_outbox_unpublished_idx
+
+-- standard outbox from common/005-outbox (transfer.* events), created by 0001_init.sql
 CREATE TABLE outbox (
   id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   topic        text        NOT NULL,
@@ -125,8 +161,7 @@ CREATE INDEX outbox_unpublished_idx ON outbox (created_at) WHERE published_at IS
 **Allowed transitions** (trigger in `0001_init.sql`, also checked by the service)
 ```
 PENDING   -> DEBITED | FAILED
-DEBITED   -> CREDITED | REVERSED   (REVERSED only after the saga's failure_reason is set and the undo is done)
-CREDITED  -> DONE
+DEBITED   -> DONE | REVERSED   (REVERSED only after the saga's failure_reason is set and the undo is done)
 DONE, FAILED, REVERSED: final, rows are immutable
 ```
 ```sql
@@ -136,8 +171,7 @@ BEGIN
     RAISE EXCEPTION 'transfer % is final (%)', OLD.id, OLD.status;
   END IF;
   IF NEW.status <> OLD.status AND (OLD.status, NEW.status) NOT IN (
-      ('PENDING','DEBITED'),('PENDING','FAILED'),('DEBITED','CREDITED'),('DEBITED','REVERSED'),
-      ('CREDITED','DONE')) THEN
+      ('PENDING','DEBITED'),('PENDING','FAILED'),('DEBITED','DONE'),('DEBITED','REVERSED')) THEN
     RAISE EXCEPTION 'invalid transfer transition % -> %', OLD.status, NEW.status;
   END IF;
   NEW.updated_at := now();
@@ -146,25 +180,30 @@ END $$;
 CREATE TRIGGER transfers_transition BEFORE UPDATE ON transfers
   FOR EACH ROW EXECUTE FUNCTION check_transfer_transition();
 ```
-Updates that keep the status are allowed until the row is final. Saga progress (`current_step`, `failure_reason`) lives in `sagas`; its rules are owned by the runner (`common/006-saga`).
+Updates that keep the status are allowed until the row is final. Saga progress (`status`, `current_step`, `failure_reason`, `deadline`) lives in `sagas`; its rules are owned by the saga library (`common/006-saga`).
 
 **Grants** (`0002_grants.sql`)
 ```sql
 REVOKE ALL ON SCHEMA transfers FROM PUBLIC;
 GRANT USAGE ON SCHEMA transfers TO transfers_svc;
-GRANT SELECT, INSERT, UPDATE ON transfers, sagas, outbox TO transfers_svc;
+GRANT SELECT, INSERT, UPDATE ON transfers, sagas, outbox, saga_outbox TO transfers_svc;   -- sagas, saga_steps, saga_outbox exist after saga::migrate
+GRANT SELECT, INSERT ON saga_steps TO transfers_svc;   -- append-only
 -- no DELETE/TRUNCATE; no DDL; no access to schemas accounts or ledger
 ```
 
 ## Dependencies
-- `platform/002-workspace-and-compose` (roles), `common/005-outbox` (outbox DDL), `common/006-saga` (sagas DDL).
+- `platform/002-workspace-and-compose` (roles), `common/005-outbox` (outbox DDL), `common/006-saga` (library migration that creates `sagas`, `saga_steps`, `saga_outbox`).
 
 ## Acceptance criteria
-- [ ] Migrations apply on an empty database as `transfers_owner`.
+- [ ] Migrations (`saga::migrate` then the transfers files) apply on an empty database as `transfers_owner`; running `saga::migrate` again is a no-op.
+- [ ] `sagas`, `saga_steps` and `saga_outbox` exist in schema `transfers` after the library migration.
 - [ ] A duplicate `(customer_id, idempotency_key)` insert is rejected.
-- [ ] An invalid status value or a transition outside the allowed list (e.g. `PENDING -> DONE`, `FAILED -> DEBITED`) is rejected; a final row cannot be updated.
+- [ ] An invalid status value or a transition outside the allowed list (e.g. `PENDING -> DONE`, `DEBITED -> PENDING`, `FAILED -> DEBITED`) is rejected; a final row cannot be updated.
 - [ ] `FAILED`/`REVERSED` rows without `failure_code` are rejected.
-- [ ] A `sagas` row with a status outside `IN_PROGRESS|DONE|FAILED|REVERSED` is rejected.
+- [ ] A `sagas` row with a status outside `RUNNING|COMPENSATING|COMPLETED|REVERSED|FAILED` is rejected.
+- [ ] Rows in `sagas` carry `current_step` (text, not null), `context` and a nullable `deadline`; the sweeper indexes (`sagas_active_idx`, `sagas_deadline_idx`) exist.
+- [ ] Unsent outbox rows are exactly those with `published_at IS NULL` (partial index `outbox_unpublished_idx`); `attempts` and `last_error` are kept.
+- [ ] A `saga_steps` row with a status outside `started|done|failed|compensated` is rejected; `transfers_svc` cannot UPDATE or DELETE `saga_steps` rows.
 - [ ] `transfers_svc` cannot DELETE/TRUNCATE, run DDL, or access schemas `accounts` or `ledger`.
 
 ## Test plan
