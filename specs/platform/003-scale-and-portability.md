@@ -38,8 +38,8 @@ This spec covers P0 (portability) and P1 (shard-ready code) only.
 - Cross-shard transfers: accepted with delayed credit (the transfers saga debit-to-transit then credit generalises to this: transit becomes the per-shard clearing account). Debit the source into a per-shard clearing account and write an outbox event; the destination shard credits idempotently on the event. Each shard sums to zero. Designed now, implemented in P4. Rejected: 2PC and distributed SQL (Citus/Cockroach), for latency and no plain RDS.
 - Treasury hot account: split into K sub-accounts, random pick per transfer; audit sums them.
 - Reads: the transfer path reads the primary only. Balance and history read Redis, then a read replica. Transfers are accepted asynchronously (`202`), so the new balance is read after the transfer reaches a final state.
-- Kafka: partition key `account_id`, 64+ partitions.
-- Backpressure: gateway concurrency limit and load shedding; transfers admission control on backlog and consumer lag (`transfers/001-service`), Kafka keyed by source account as the buffer; small DB pools plus PgBouncer or RDS Proxy.
+- Kafka: partition key `account_id` (`saga_id` on `accounts.commands`/`accounts.replies`, so ordering across transfers of one account is not guaranteed; the ledger checks make that safe), 64+ partitions.
+- Backpressure: gateway concurrency limit and load shedding; transfers admission control on backlog and consumer lag (`transfers/001-service`), Kafka (`accounts.commands`/`accounts.replies`, keyed by `saga_id`) as the buffer; small DB pools plus PgBouncer or RDS Proxy.
 - Rate limiting: Redis token bucket per user/IP plus an in-process per-pod limit.
 - Observability: RED metrics, `shard` label, outbox and consumer lag, pool wait. SLO: p99 < 200 ms, errors < 0.1%.
 - Deploy tool: Kustomize (base plus kind/cloud overlays, in P2) with Compose for local. Helm rejected for now. The cloud overlay is AWS-only; code stays provider-neutral via env vars.

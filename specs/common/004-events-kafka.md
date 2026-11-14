@@ -37,11 +37,12 @@ pub struct EventEnvelope<T> {
 pub struct Topic<T> { pub name: &'static str, _p: PhantomData<T> }
 pub const ACCOUNTS_EVENTS: Topic<AccountEvent> = Topic::new("accounts.events.v1");
 pub const LEDGER_POSTINGS: Topic<PostingEvent> = Topic::new("ledger.postings.v1");
-pub const TRANSFERS_COMMANDS: Topic<TransferCommand> = Topic::new("transfers.commands.v1");
+pub const ACCOUNTS_COMMANDS: Topic<SagaCommand> = Topic::new("accounts.commands");
+pub const ACCOUNTS_REPLIES: Topic<SagaReply> = Topic::new("accounts.replies");
 pub const TRANSFERS_EVENTS: Topic<TransferEvent> = Topic::new("transfers.events.v1");
 impl<T> Topic<T> { pub fn dlq(&self) -> String /* "<topic>.dlq.v1" derived from the base name */ }
 ```
-- DLQ naming: `<topic>.dlq.v1`, e.g. `accounts.events.dlq.v1` (the `.v1` suffix of the source topic is replaced). Event payload structs (`AccountEvent`, `PostingEvent`, `TransferCommand`, `TransferEvent`) live in this crate so producers and consumers share them.
+- DLQ naming: `<topic>.dlq.v1`, e.g. `accounts.events.dlq.v1` (the `.v1` suffix of the source topic is replaced). Event payload structs (`AccountEvent`, `PostingEvent`, `SagaCommand`, `SagaReply`, `TransferEvent`; commands and replies are plain messages, not event envelopes, see `transfers/001-service`; the saga library `common/006-saga` is transport-agnostic) live in this crate so producers and consumers share them.
 
 **Publisher**
 - Settings: `acks=all`, `enable.idempotence=true`, `max.in.flight.requests.per.connection=5`, `compression.type=lz4`, bounded `message.timeout.ms`.

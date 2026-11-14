@@ -6,7 +6,7 @@ Status: draft
 A Cargo workspace with `common/` libraries and `services/` binaries, and a `docker compose up` that starts infrastructure and creates per-service DB roles and schemas.
 
 ## Scope (in)
-- Root `Cargo.toml` workspace. Members: `common/*` (one library crate each: `money`, `errors`, `events`, `outbox`, `auth`, `telemetry`) and `services/*` (`accounts`, `ledger`, `transfers`, `gateway`, `web`). Service crates may start as skeletons with a health endpoint.
+- Root `Cargo.toml` workspace. Members: `common/*` (one library crate each: `money`, `errors`, `events`, `outbox`, `auth`, `telemetry`), `crates/saga` (the saga library, `common/006-saga`), and `services/*` (`accounts`, `ledger`, `transfers`, `gateway`, `web`). Service crates may start as skeletons with a health endpoint.
 - `docker-compose.yml`: `postgres` (`pgvector/pgvector:pg16`, port 5432, volume `pgdata`), `kafka` (`apache/kafka`, KRaft, port 9092, volume `kafkadata`, 3 partitions default), service containers.
 - `.env.example`; no secrets committed.
 - One shared cargo-chef `Dockerfile` (build arg `SERVICE`, path `services/$SERVICE`).
@@ -20,7 +20,7 @@ A Cargo workspace with `common/` libraries and `services/` binaries, and a `dock
 ## Design
 **Layout**
 ```
-Cargo.toml                 # [workspace] members = ["common/*", "services/*"]
+Cargo.toml                 # [workspace] members = ["common/*", "crates/*", "services/*"]
 common/{money,errors,events,outbox,auth,telemetry}/
 services/{accounts,ledger,transfers,gateway,web}/
 migrations/{accounts,ledger,transfers}/

@@ -2,7 +2,7 @@
 
 Status: draft
 
-Note: the ledger holds postings only. The user-facing transfer workflow and its state live in the transfers service (`transfers/002-schema`).
+Note: the ledger holds postings only. The user-facing transfer workflow and its state live in the transfers service (`transfers/002-schema`). The caller of `POST /postings` is the accounts service (`role = service`), applying saga commands; the `Idempotency-Key` is the command's UUIDv5 idempotency key.
 
 ## Goal
 Full Postgres DDL, grants and invariant enforcement for schema `ledger`.
@@ -84,7 +84,7 @@ erDiagram
     timestamptz published_at
   }
 ```
-`idempotency_keys.customer_id` holds the caller's customer id (the nil UUID for admin calls without a customer). `processed_events` and `outbox` are standalone.
+`idempotency_keys.customer_id` holds the caller's customer id (the nil UUID for service calls from accounts and admin calls without a customer); for saga postings `key` is the command's UUIDv5 idempotency key. `processed_events` and `outbox` are standalone.
 
 **DDL** (`0001_init.sql`)
 ```sql

@@ -6,7 +6,7 @@ Status: draft
 Full Postgres DDL, grants and migration conventions for schema `accounts`.
 
 ## Scope (in)
-- Tables: `customers`, `accounts`, `payees`, `sessions`, `outbox`, `account_balances` (read-only projection of ledger balances), `processed_events`.
+- Tables: `customers`, `accounts`, `payees`, `sessions`, `outbox`, `account_balances` (read-only projection of ledger balances), `processed_events`, `saga_commands` (saga command dedupe).
 - Constraints, indexes, grants per DB role.
 - Migration naming.
 
@@ -15,7 +15,7 @@ Full Postgres DDL, grants and migration conventions for schema `accounts`.
 - Redis sessions (phase 2; `sessions` table is replaced then).
 
 ## Design
-**Migrations**: `migrations/accounts/NNNN_description.sql` (4-digit zero-padded, increasing; never edited after merge). Phase 1: `0001_init.sql` (all below, including `account_balances` and `processed_events`), `0002_grants.sql`. Run by `accounts_owner` at service start.
+**Migrations**: `migrations/accounts/NNNN_description.sql` (4-digit zero-padded, increasing; never edited after merge). Phase 1: `0001_init.sql` (all below, including `account_balances`, `processed_events` and `saga_commands`), `0002_grants.sql`. Run by `accounts_owner` at service start.
 
 **Roles**: `accounts_owner` owns the schema and all objects (migrations only). `accounts_svc` is the runtime role.
 
@@ -60,6 +60,14 @@ erDiagram
     timestamptz as_of
     timestamptz updated_at
   }
+  saga_commands {
+    uuid idempotency_key PK
+    uuid saga_id
+    text step
+    boolean applied
+    jsonb reply
+    timestamptz created_at
+  }
   outbox {
     uuid id PK
     text topic
@@ -68,7 +76,7 @@ erDiagram
     timestamptz published_at
   }
 ```
-`outbox` has no foreign keys by design (it is an event log written in the same transaction).
+`outbox` and `saga_commands` have no foreign keys by design (`outbox` is an event log written in the same transaction; `saga_commands` ids come from the transfers saga, other schema).
 
 **DDL** (`0001_init.sql`)
 ```sql
@@ -138,6 +146,17 @@ CREATE TABLE processed_events (
   PRIMARY KEY (event_id, consumer)
 );
 
+-- saga command dedupe (accounts/001-service, common/006-saga): one row per handled command, written in the same transaction as the ledger result
+CREATE TABLE saga_commands (
+  idempotency_key uuid        PRIMARY KEY,        -- UUIDv5(saga_id, step), from the command; an undo has step '{step}:undo'
+  saga_id         uuid        NOT NULL,
+  step            text        NOT NULL,           -- step name from the command, e.g. 'debit' or 'debit:undo'
+  applied         boolean     NOT NULL,           -- false: undo ('debit:undo') for a never-applied debit, or a debit rejected as compensated (no posting made)
+  reply           jsonb       NOT NULL,           -- {saga_id, step, result, code}, re-sent verbatim on a seen key
+  created_at      timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX saga_commands_saga_idx ON saga_commands (saga_id, step);
+
 -- standard outbox from common/005-outbox
 CREATE TABLE outbox (
   id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -156,6 +175,7 @@ Notes
 - Expired sessions are treated as missing on read and removed by a periodic `DELETE ... WHERE expires_at < now()`.
 - No treasury or system accounts exist here; they exist only in `ledger` (see `ledger/002-schema`).
 - `account_balances` rows are created on the first posting for an account (no row means balance 0, `as_of` null). The ledger enforces non-negative balances; this table stores what the ledger said. Rows are upserted only when `last_version` increases.
+- `saga_commands`: a seen `idempotency_key` re-sends `reply` and applies nothing. The undo marker is the undo row itself, whose `step` is `<debit step>:undo` (`debit:undo`): a `debit` is rejected (`failed`, `compensated`) when `EXISTS (SELECT 1 FROM saga_commands WHERE saga_id = $1 AND step = $2 || ':undo')` with `$2` the debit step. There is no `cmd` column; the step name identifies the command. A `debit:undo` with no earlier `debit` row is inserted with `applied = false`, reply `ok`, and makes no posting. A rejected late `debit` is inserted with `applied = false` and its `failed` reply. The service takes `pg_advisory_xact_lock(hashtext(saga_id::text))` before the check so a debit and its undo for one saga serialize. Rows are never updated or deleted in phase 1.
 - Payee `account_number` is not a foreign key: it may refer to an account of another customer, and no cross-customer lookup is exposed.
 
 **Grants** (`0002_grants.sql`)
@@ -168,6 +188,7 @@ GRANT SELECT, INSERT, DELETE         ON payees, sessions TO accounts_svc;
 GRANT SELECT, INSERT, UPDATE         ON outbox    TO accounts_svc;   -- relay marks published
 GRANT SELECT, INSERT, UPDATE         ON account_balances TO accounts_svc;  -- written by the consumer module only
 GRANT SELECT, INSERT                 ON processed_events TO accounts_svc;
+GRANT SELECT, INSERT                 ON saga_commands    TO accounts_svc;   -- append-only dedupe record
 -- no TRUNCATE, no DDL, no access to other schemas
 ```
 
@@ -182,6 +203,10 @@ GRANT SELECT, INSERT                 ON processed_events TO accounts_svc;
 - [ ] Outbox partial index exists.
 - [ ] `account_balances.account_id` must reference an existing account; duplicate `(event_id, consumer)` in `processed_events` is rejected.
 - [ ] An upsert with a lower or equal `last_version` leaves the row unchanged.
+- [ ] A second `saga_commands` insert with the same `idempotency_key` is rejected.
+- [ ] `accounts_svc` cannot UPDATE or DELETE `saga_commands`.
+- [ ] After a row with `step = 'debit:undo'` exists for a `saga_id`, the late-debit lookup finds it (via `saga_commands_saga_idx`), so a `debit` for that saga is rejected.
+- [ ] A `debit:undo` with no prior `debit` row is stored with `applied = false` and an `ok` reply.
 
 ## Test plan
 - Integration (testcontainers Postgres): apply migrations; attempt each violating insert; connect as `accounts_svc` and assert denied statements.
