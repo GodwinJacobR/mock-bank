@@ -10,7 +10,7 @@ Status: todo | in progress | done
 | M3 RAG over transactions with vector DB | 0/1 |
 | M4 AI agent with tools and MCP server | 0/1 |
 | M5 Load testing and observability | 0/2 |
-| Chore | 0/1 |
+| Chore | 0/2 |
 
 ## M1 – Core (accounts, ledger, Postgres, web UI, admin console)
 
@@ -56,3 +56,4 @@ Status: todo | in progress | done
 | ID | Task | Spec | Branch | PR | Status |
 |----|------|------|--------|----|--------|
 | T-013 | Tasks milestones restructure | - | chore/tasks-milestones | [#6](https://github.com/GodwinJacobR/mock-bank/pull/6) | in progress |
+| T-016 | Domain glossaries and ADRs | [glossary map](GLOSSARY-MAP.md) | domain-glossary | [#16](https://github.com/GodwinJacobR/mock-bank/pull/16) | in progress |
