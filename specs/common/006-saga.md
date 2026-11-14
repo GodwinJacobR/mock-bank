@@ -33,6 +33,27 @@ Rules
 - Undo steps run in reverse order of the completed steps.
 - Non-undoable steps (`undo = none`) go last. The first one is the point of no return: after it the saga only moves forward. A non-undoable step must not fail on business grounds; its only failures are transient and are retried until they succeed. The runner refuses to register a type where a step with `undo` follows a step without one.
 
+**Step contract**. Each step implements four methods. `run` is the `action` and `compensate` is the `undo` of the table above; the hooks add decisions.
+```rust
+#[async_trait]
+trait Step {
+    async fn run(&self, ctx: &mut Ctx) -> Result<Output, StepError>;
+    async fn compensate(&self, ctx: &Ctx) -> Result<(), StepError>;                    // default: no-op (`undo = none`)
+    fn on_success(&self, ctx: &mut Ctx, out: Output) -> Next { ctx.store(out); Next::Step(self.next_in_order()) }
+    fn on_failure(&self, ctx: &Ctx, err: &StepError, attempt: u32) -> Failure { Failure::Compensate }
+}
+enum Next    { Step(StepId), Done, Wait }
+enum Failure { Retry, Compensate, Skip, Fail }
+#[derive(thiserror::Error, Debug)]
+enum StepError { #[error("retryable: {0}")] Retryable(String), #[error("permanent: {0}")] Permanent(String) }
+```
+- `on_success` stores the step output in the saga context (`sagas.payload`) and returns `Next`: `Step(id)` (any step, so a saga can branch on earlier outputs), `Done` (final status `DONE`), or `Wait` (park until a reply arrives).
+- `on_failure` handles the failed step and returns `Failure`: `Retry` (same key, bounded by `max_attempts`; past the limit the runner treats it as `Compensate`), `Compensate` (set `failure_reason`, start the undo), `Skip` (continue as if done, nothing stored), `Fail` (stop, status `FAILED`). `StepError::Retryable` is transient and `Permanent` is a business rejection (see Failure handling).
+- `compensate` is not `on_failure`: `on_failure` decides what happens after the failed step, `compensate` undoes steps that already succeeded, in reverse order, and must be idempotent (key `{saga_id}-{step}-undo`).
+- Hooks run inside the runner transaction (step 6) and write the `saga_steps` row and the `sagas` update. They are synchronous and do no external side effects; to call something, add a step.
+- Defaults: `on_success` -> next step in order (`Done` after the last); `on_failure` -> `Compensate`.
+- A `Wait` step leaves the saga `IN_PROGRESS`. The reply handler (Kafka consumer for the reply event) loads the row `FOR UPDATE` and calls `on_success` or `on_failure` for that step; the sweeper does not resume it before `SAGA_STALE_AFTER`.
+
 **State table** (standard DDL, copied into each service's init migration like the outbox)
 ```sql
 CREATE TABLE sagas (
@@ -115,6 +136,13 @@ CREATE INDEX saga_steps_saga_idx ON saga_steps (saga_id, ts);
 - [ ] The offset is committed only after the saved row is final.
 - [ ] `saga_steps` is append-only and the history query returns every step of a saga in order, including `compensated` rows after an undo.
 - [ ] The same `saga_id` appears in every log line and span for a saga.
+- [ ] `on_success` output is stored in the saga context, and a returned `Next::Step(id)` jumps to that step (branching), `Done` ends `DONE`.
+- [ ] Default hooks: `on_success` goes to the next step in order, `on_failure` starts compensation.
+- [ ] `on_failure` returning `Retry` retries up to `max_attempts` then compensates; `Skip` continues; `Fail` ends `FAILED`.
+- [ ] `StepError` separates retryable from permanent: only `Retryable` reaches `Retry`.
+- [ ] `compensate` runs in reverse order only for succeeded steps, and replaying it with the same key has no second effect.
+- [ ] Hooks run in the runner transaction: the `saga_steps` row and `sagas` update commit together, and a hook failure rolls both back.
+- [ ] A `Wait` step leaves the saga `IN_PROGRESS`; the reply handler resumes it through `on_success` or `on_failure`.
 
 ## Test plan
 - Unit: step ordering, undo selection, backoff schedule, step-list validation.
