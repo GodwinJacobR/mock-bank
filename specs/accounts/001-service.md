@@ -3,7 +3,7 @@
 Status: draft
 
 ## Goal
-Own customers, accounts, payees and login sessions; publish account events. Keeps a read-only, eventually consistent balance projection built from `ledger.postings.v1`. The ledger stays the single source of truth for money and the authoritative overdraft check.
+Own customers, accounts, payees and login sessions; publish account events; execute saga commands from transfers (debit, credit, undo) through the ledger. Keeps a read-only, eventually consistent balance projection built from `ledger.postings.v1`. The ledger stays the single source of truth for money and the authoritative overdraft check.
 
 ## Scope (in)
 - Uses schema `accounts` (DDL, grants, migrations in `accounts/002-schema`).
@@ -11,13 +11,14 @@ Own customers, accounts, payees and login sessions; publish account events. Keep
 - Account number generation.
 - Argon2 login, Postgres-backed sessions (phase 1).
 - Balance projection: consumes `ledger.postings.v1`, maintains `account_balances`, and serves `balance_minor` + `as_of` on account reads (see Balance projection).
+- Saga command handling: consumes `accounts.commands`, dedupes by idempotency key, applies the posting through the ledger, publishes `accounts.replies`, acks the command only after the reply (see Saga commands).
 - Authorization: a customer only accesses own data, enforced here from `X-Customer-Id` (signed internal JWT, `common/002-auth-claims`).
 
 ## Out of scope
 - Authoritative balances, postings, overdraft enforcement, transfers (ledger). The projection is a read model only; nothing here decides whether money can move.
 - Redis sessions (phase 2), KYC, email verification.
-- Calling other services over HTTP.
-- Being called by transfers other than for the read endpoints `GET /accounts/{id}` (pre-check, including the advisory balance check at admission) and `GET /accounts/resolve`.
+- Calling other services over HTTP, except ledger `POST /postings` when applying a saga command.
+- Being called by transfers over HTTP other than for the read endpoints `GET /accounts/{id}` (start lookups, including the advisory balance check at admission) and `GET /accounts/resolve`. Money movement comes only through `accounts.commands`.
 
 ## Design
 
@@ -32,7 +33,7 @@ Own customers, accounts, payees and login sessions; publish account events. Keep
 - `GET /accounts` -> `200 [{id, account_number, currency, status, balance_minor, as_of}]` (admin: all accounts with `customer_id`; optional `customer_id` filter). Balance fields are eventually consistent, see Balance projection.
 - `GET /customers` (admin) -> `200 [{id, email, name}]`
 - `GET /accounts/{id}` -> `200 {id, account_number, currency, status, balance_minor, as_of}` or `404` (other customer's account is `404`; admin/service sees any)
-- `GET /accounts/resolve?account_number=` -> `200 {id, currency, status}` or `404`. Minimal fields only (no owner, name or email). Used by the transfers pre-check; any authenticated caller. Fixes no cross-customer lookup by name or email.
+- `GET /accounts/resolve?account_number=` -> `200 {id, currency, status}` or `404`. Minimal fields only (no owner, name or email). Used by the transfers start lookups; any authenticated caller. Fixes no cross-customer lookup by name or email.
 - `PATCH /accounts/{id}` `{status: "closed"}` -> `200`
 - `POST /payees` `{name, account_number}` -> `201 {id, name, account_number}`
 - `GET /payees` -> `200 [...]`; `DELETE /payees/{id}` -> `204`
@@ -41,6 +42,13 @@ Own customers, accounts, payees and login sessions; publish account events. Keep
 - `AccountOpened` payload `{account_id, customer_id, account_number, currency}`
 - `AccountClosed` payload `{account_id}`
 - Each change calls `outbox::enqueue(tx, ...)` inside the same transaction as the account change; the service runs `outbox::run_relay` (see `common/005-outbox`). No relay logic is defined here.
+
+**Saga commands** (consumer of `accounts.commands`, producer of `accounts.replies`; message formats in `common/006-saga`)
+- Group `accounts-commands`; commands are keyed by `saga_id`. Command `{saga_id, step, cmd, account, amount, idempotency_key}` with `cmd` in `debit`, `credit`, `undo_debit`.
+- Dedupe by `idempotency_key`: the key and the stored reply are recorded with the command result. A seen key re-sends the stored reply and applies nothing again.
+- Otherwise, in order: call ledger `POST /postings` as `role = service` (debit: account to `bank:transit:<CUR>`; credit: transit to account; undo_debit: transit to the original account) using the command's `idempotency_key` as the posting key; record the result; publish the reply to `accounts.replies` (key = `saga_id`, payload `{saga_id, step, result, code}`, `result` `ok` or `failed`, `code` the business reason such as `insufficient_funds`, `account_closed`); then commit the command offset. The offset is committed only after the reply is published, so a crash redelivers the command and the dedupe makes it safe.
+- Late action: a `debit` whose `debit:undo` key was already seen is rejected with reply `failed`, code `compensated`, and no posting. An `undo_debit` for a debit that was never applied is recorded and answered `ok` with no effect (and blocks a later debit of the same saga).
+- Retriable ledger errors (`409 account_not_ready`, timeouts) are retried by the consumer without replying; business errors (`422`) become `failed` replies.
 
 **Balance projection** (eventually consistent, read-only)
 - Consumes `ledger.postings.v1` with the `common/004-events-kafka` runner (group `accounts-balances`; dedup on `event_id` via `processed_events`, handler in the runner's transaction). The topic key is the source account id; a posting touches two accounts that may sit on different partitions, so ordering is by per-account `version`, not by arrival (see `ledger/001-service` event payload).
@@ -52,7 +60,7 @@ Own customers, accounts, payees and login sessions; publish account events. Keep
 - Metrics: `accounts_balance_projection_lag_seconds` (now minus `occurred_at` of the last applied event), `consumer_lag{group="accounts-balances"}`, `events_dlq_total`. Alerts: projection lag above 30 s for 2 min (warn), above 5 min (page); consumer lag above 1000 for 2 min; any DLQ message on the topic.
 
 ## Dependencies
-- `ledger/001-service` (`ledger.postings.v1` payload), `accounts/002-schema`, `common/001-money-and-errors`, `common/002-auth-claims`, `common/003-telemetry`, `common/004-events-kafka`, `common/005-outbox`
+- `ledger/001-service` (`ledger.postings.v1` payload, `POST /postings`), `common/006-saga` (command and reply messages), `accounts/002-schema`, `common/001-money-and-errors`, `common/002-auth-claims`, `common/003-telemetry`, `common/004-events-kafka`, `common/005-outbox`
 
 ## Acceptance criteria
 - [ ] Creating a customer stores an argon2 hash, never plaintext.
@@ -74,6 +82,11 @@ Own customers, accounts, payees and login sessions; publish account events. Keep
 - [ ] An account with no postings returns `balance_minor: 0, as_of: null`.
 - [ ] Wiping `account_balances` and replaying `ledger.postings.v1` from earliest reproduces the ledger balances.
 - [ ] After a mixed workload, every projected balance equals ledger `balances` once consumer lag is zero.
+- [ ] A `debit` command moves funds to transit via one ledger posting and publishes an `ok` reply on `accounts.replies` keyed by `saga_id`; an overdraft yields a `failed` reply with `insufficient_funds`.
+- [ ] A command redelivered with the same `idempotency_key` re-sends the stored reply and creates no second posting.
+- [ ] The command offset is committed only after the reply is published (a crash between them redelivers; no double effect).
+- [ ] A `debit` whose `debit:undo` key was already seen is rejected (`failed`, `compensated`) with no posting.
+- [ ] An `undo_debit` for a never-applied debit answers `ok` with no effect.
 - [ ] Metric `accounts_balance_projection_lag_seconds` is exported and the alert rule fires when the consumer is stopped.
 
 ## Test plan

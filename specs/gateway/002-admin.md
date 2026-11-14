@@ -28,7 +28,7 @@ Admin-only gateway routes to create customers and accounts, fund accounts, and p
 
 **Bulk transfers**
 - Items processed sequentially, in order. No size cap.
-- For item `i` (0-based) the gateway calls transfers `POST /transfers` as admin with `Idempotency-Key: {batch}-{i}`. Same path as a normal transfer: accepted with `202`, queued on `transfers.commands.v1`, run by the saga, `transfer.*` events on `transfers.events.v1`. Nothing is written directly to Kafka or SQL.
+- For item `i` (0-based) the gateway calls transfers `POST /transfers` as admin with `Idempotency-Key: {batch}-{i}`. Same path as a normal transfer: accepted with `202`, run by the saga (commands on `accounts.commands`), `transfer.*` events on `transfers.events.v1`. Nothing is written directly to Kafka or SQL.
 - Not atomic: each item is its own transfer; a failed item does not roll back or stop others. The batch response reports admission only; final outcomes (`done`, `failed`, `reversed`) come from `GET /transfers/{id}`.
 - `503`/`429` with `Retry-After` from transfers is retried per item honouring `Retry-After` (backoff e.g. 250 ms, 500 ms, 1 s, 2 s, 4 s; then reported `failed`). `account_not_ready` is retried by the saga itself. Other errors are not retried.
 - Response `200 {batch, items: [{index, status, transfer_id?, error?, message?}]}` where status is `accepted` (202, new transfer), `replayed` (transfers returned the existing transfer for the same key and body) or `failed` (rejected at admission or validation, error code passed through, e.g. `idempotency_conflict`, `overloaded`). `transfer_id` is set for `accepted` and `replayed`.

@@ -62,7 +62,7 @@ The single public REST API. Authenticates users, routes to accounts, ledger and 
 - [ ] Transfers errors are passed through with their codes; business failures found by the saga (`insufficient_funds` at the ledger debit, `account_closed`) appear as the final transfer state (`failure_code`), not as the POST response; the only business reject at the POST is the advisory early `422 insufficient_funds`.
 - [ ] Admin endpoints reject missing or wrong token; customer cookie cannot reach them.
 - [ ] Customer cannot see another customer's data.
-- [ ] Gateway is the only user-facing caller of accounts, ledger and transfers (the transfers workers call accounts and ledger for the saga).
+- [ ] Gateway is the only user-facing caller of accounts, ledger and transfers (transfers reads accounts at transfer start; accounts applies saga commands from Kafka and calls the ledger).
 
 ## Test plan
 - Integration tests with accounts, ledger and transfers stubbed (wiremock) for balance passthrough (ledger unused), passthrough, auth failures.

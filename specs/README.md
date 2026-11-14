@@ -12,11 +12,11 @@ Folders
 - Specs are grouped by area folder.
 - Numbering restarts in each folder.
 - New common library specs: events-kafka, outbox, saga, money-and-errors, auth-claims, telemetry.
-- Saga is a generic runner (`common/006-saga`); transfers is its first saga type.
+- Saga is a generic orchestrator (`common/006-saga`); transfers is its first saga type. Steps are Kafka commands and replies (`accounts.commands` / `accounts.replies`, keyed by `saga_id`); accounts executes them through the ledger, deduping by idempotency key.
 - Full DB schema specs for accounts and ledger.
 - Accounts keeps a read-only balance projection from `ledger.postings.v1` (`balance_minor` + `as_of`); gateway reads balances from accounts only; transfers uses it for an advisory early funds check. Ledger stays authoritative.
 - Code layout is now `common/` crates plus `services/`.
-- New `transfers/` service (async saga, Kafka-buffered). Ledger is postings only (`ledger.postings.v1`); `transfer.*` events come from transfers.
+- New `transfers/` service (async saga, Kafka-buffered). Ledger is postings only (`ledger.postings.v1`), called by accounts; `transfer.*` events come from transfers.
 
 | Spec | Title | Depends on |
 |---|---|---|
@@ -34,7 +34,7 @@ Folders
 | [accounts/002-schema](accounts/002-schema.md) | Accounts DB schema | platform/002-workspace-and-compose |
 | [ledger/001-service](ledger/001-service.md) | Ledger service | ledger/002-schema, common/* |
 | [ledger/002-schema](ledger/002-schema.md) | Ledger DB schema | platform/002-workspace-and-compose |
-| [transfers/001-service](transfers/001-service.md) | Transfers service | transfers/002-schema, common/006-saga, accounts/001-service, ledger/001-service, common/* |
+| [transfers/001-service](transfers/001-service.md) | Transfers service | transfers/002-schema, common/006-saga, accounts/001-service, common/* |
 | [transfers/002-schema](transfers/002-schema.md) | Transfers DB schema | platform/002-workspace-and-compose |
 | [gateway/001-service](gateway/001-service.md) | Gateway | accounts/001-service, ledger/001-service, transfers/001-service |
 | [gateway/002-admin](gateway/002-admin.md) | Gateway admin API | gateway/001-service |

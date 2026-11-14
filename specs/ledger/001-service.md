@@ -3,7 +3,7 @@
 Status: draft
 
 ## Goal
-Source of truth for money: double-entry postings, balances, idempotency, treasury and transit accounts, and a projection of accounts built from Kafka. The ledger no longer runs the transfer workflow; the transfers service (`transfers/001-service`) orchestrates debit and credit postings.
+Source of truth for money: double-entry postings, balances, idempotency, treasury and transit accounts, and a projection of accounts built from Kafka. The ledger no longer runs the transfer workflow; the transfers service (`transfers/001-service`) orchestrates the saga and the accounts service applies each debit, credit and undo as a ledger posting.
 
 ## Scope (in)
 - Uses schema `ledger` (DDL, grants, invariants, system accounts in `ledger/002-schema`).
@@ -16,14 +16,14 @@ Source of truth for money: double-entry postings, balances, idempotency, treasur
 - The transfer workflow: state machine, saga, compensation, queueing, results polling (`transfers/001-service`).
 - FX / cross-currency postings, Redis cache.
 - Customers, payees, account numbers (accounts service).
-- Calling other services over HTTP.
+- Calling other services over HTTP. The ledger is called by accounts, never by transfers.
 
 ## Design
 
 **Endpoints** (internal; JWT with `X-Customer-Id`)
 - `POST /postings` header `Idempotency-Key` (required), body `{from_account_id, to_account_id, amount_minor, currency, memo, transfer_ref, initiator_role}` -> `201 {id, from_account, to_account, amount_minor, currency, memo, transfer_ref, created_at}`
-  - Caller role must be `service` (the transfers workers), else 403. Accounts are given by id; there is no account-number lookup here.
-  - `initiator_role` (`customer` | `admin`) is the role of the original requester, copied by the transfers service. A treasury source requires `initiator_role = admin` (else 403), enforced here, not only in gateway or transfers.
+  - Caller role must be `service` (accounts, applying a saga command), else 403. Accounts are given by id; there is no account-number lookup here.
+  - `initiator_role` (`customer` | `admin`) is the role of the original requester, passed on by accounts from the saga command. A treasury source requires `initiator_role = admin` (else 403), enforced here, not only in gateway or transfers.
 - `GET /accounts/{id}/balance` -> `200 {account_id, balance_minor, currency}` (owner only)
 - `POST /balances/query` `{account_ids: [...]}` -> `200 [{account_id, balance_minor, currency}]` (owner only; authoritative reads for admin/audit via the gateway. Customer account pages no longer use it: they read the accounts balance projection)
 - `GET /accounts/{id}/postings?limit=&before=` -> `200 [{id, direction, counterparty, amount_minor, currency, memo, transfer_ref, created_at}]` (owner only). Postings against `bank:transit:<CUR>` are hidden from customer history; the gateway shows customer transaction history from the transfers service (`GET /accounts/{id}/transfers`).
@@ -33,13 +33,13 @@ Source of truth for money: double-entry postings, balances, idempotency, treasur
 1. Resolve both accounts in `account_projection`; missing -> `409 account_not_ready` (retriable, same key safe). Closed destination or source (not for a reversal, see below) -> `422 account_closed`. Currency mismatch -> `422 currency_mismatch`.
 2. Idempotency lookup: same key + same request hash -> return stored response; same key + different body -> `422 idempotency_conflict`.
 3. Lock both `balances` rows in account-id order.
-4. If the source is not treasury and balance < amount -> `422 insufficient_funds`. This is the authoritative overdraft check; the accounts pre-check in the transfers service is advisory only.
+4. If the source is not treasury and balance < amount -> `422 insufficient_funds`. This is the authoritative overdraft check; the balance pre-check in the transfers service (accounts projection) is advisory only.
 5. Insert posting, two entries (sum 0), update balances, store idempotency record and response, `outbox::enqueue`.
 6. Commit, return 201.
 
-Reversal postings (the transfers service sends `{transfer_id}-debit-undo`: transit to the original source) are ordinary postings. They skip the closed-account check on the destination so a debit can be returned even if the customer closed the account meanwhile.
+Reversal postings (accounts applies the `debit:undo` command: transit to the original source, posted with that command's idempotency key) are ordinary postings. They skip the closed-account check on the destination so a debit can be returned even if the customer closed the account meanwhile.
 
-**Transit accounts**: a transfer's debit posting moves funds customer to `bank:transit:<CUR>`; the credit posting moves transit to the destination. Each posting stays two entries summing to zero, so the zero-sum invariant needs no change.
+**Transit accounts**: a transfer's debit posting (applied by accounts on the `debit` command) moves funds customer to `bank:transit:<CUR>`; the credit posting moves transit to the destination. Each posting stays two entries summing to zero, so the zero-sum invariant needs no change.
 
 **Events**
 - Consumes `accounts.events.v1` with the `common/004-events-kafka` runner (group `ledger-projection`; handler runs in the runner's transaction, so `processed_events` dedup and offset commit are the crate's job): `AccountOpened` upserts projection and balance row (0); `AccountClosed` sets status.
