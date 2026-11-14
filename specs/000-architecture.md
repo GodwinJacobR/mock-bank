@@ -51,7 +51,7 @@ All services are Rust (edition 2021+), `axum` for HTTP, `sqlx` for Postgres, `to
 |---|---|---|
 | accounts | Customers, accounts, account status, saved payees. Publishes `accounts.events.v1` via outbox. Executes saga commands from `accounts.commands` through the ledger (dedupe by idempotency key) and publishes `accounts.replies`. Keeps a read-only, eventually consistent balance projection built from `ledger.postings.v1` (`account_balances`); serves `balance_minor` + `as_of` on account reads. Not authoritative. | schema `accounts`: `customers`, `accounts`, `payees`, `account_balances`, `processed_events`, `outbox` |
 | ledger | Source of truth for money. Double-entry postings, balances, idempotency, system accounts (treasury, transit). No transfer workflow. Keeps a read-only projection of accounts built from `accounts.events.v1`. Publishes events via outbox (`ledger.postings.v1` carries post-posting balances and per-account versions for the accounts balance projection). Remains the single source of truth and the authoritative overdraft check. | schema `ledger`: `postings`, `entries`, `balances`, `idempotency_keys`, `account_projection`, `outbox` |
-| transfers | Customer-facing transfer workflow. Accepts transfers (202), queues them on Kafka, runs a resumable saga on the generic saga runner (`common/006-saga`; steps debit, credit), serves results (poll, SSE). Publishes `transfer.*` events via outbox. | schema `transfers`: `transfers`, `sagas`, `outbox` |
+| transfers | Customer-facing transfer workflow. Accepts transfers (202), queues them on Kafka, hosts the saga library (`crates/saga`, `common/006-saga`) and defines the transfer saga (steps debit, credit), serves results (poll, SSE). Publishes `transfer.*` events via outbox. | schema `transfers`: `transfers`, `outbox`, plus `sagas`, `saga_steps`, `saga_outbox` created by the saga library migration |
 | gateway | Single public API (BFF). Auth, rate limiting, routing. The only caller of accounts, ledger and transfers on behalf of users. Account pages come from accounts alone (balances included, from the projection); ledger balances only for admin/audit. | Redis only (sessions, rate limits) |
 | assistant | RAG question answering and the agent loop. Calls Anthropic. Owns embeddings and chat history. | schema `assistant`: `documents`, `embeddings` (pgvector), `conversations`, `approvals` |
 | mcp-server | Exposes banking API as MCP tools. Thin adapter over gateway; no data. | none |
@@ -86,7 +86,7 @@ Single broker (KRaft mode, no ZooKeeper) locally. Retention for `accounts.events
 | Topic | Producer | Consumers | Key | Purpose |
 |---|---|---|---|---|
 | `accounts.commands` | transfers (outbox relay) | accounts (command consumer) | `saga_id` | Saga commands (debit, credit, undo): buffer; acked by accounts only after the reply is published |
-| `accounts.replies` | accounts | transfers (group `transfers-orchestrator`) | `saga_id` | Saga replies `{saga_id, step, result, code}` |
+| `accounts.replies` | accounts | transfers (group `transfers-saga-replies`) | `saga_id` | Saga replies `{saga_id, step, result, code}` |
 | `transfers.events.v1` | transfers (outbox relay) | SSE fan-out in transfers, assistant (embedder), cache invalidator | `account_id` of source account | `transfer.created/debited/completed/failed/reversed` |
 | `ledger.postings.v1` | ledger (outbox relay) | accounts (group `accounts-balances`, balance projection), cache invalidator | `account_id` of source account | Posting posted |
 | `accounts.events.v1` | accounts (outbox relay) | ledger (projection), assistant | `account_id` | Account opened / closed / updated |
@@ -116,9 +116,9 @@ Outbox pattern (ledger, accounts and transfers; implemented once in `common/005-
 Create transfer (async saga; `transfers/001-service`)
 1. UI sends `POST /transfers` with header `Idempotency-Key` to the gateway.
 2. Gateway authenticates, rate limits (`429` + `Retry-After`), checks `idem:{key}` in Redis (phase 2), forwards to transfers.
-3. Transfers checks admission (backlog, consumer lag, per-customer in-flight; over limit -> `503`/`429` + `Retry-After`). In one transaction it inserts the `transfers` row (`PENDING`), the `sagas` row, the first `saga_steps` row and the outbox rows (debit command, `transfer.created`). Same key + same body returns the same `transfer_id`; different body returns 422. It returns `202 {transfer_id}`.
+3. Transfers checks admission (backlog, consumer lag, per-customer in-flight; over limit -> `503`/`429` + `Retry-After`). In one transaction it inserts the `transfers` row (`PENDING`), the `sagas` row (library `start`) and the `transfer.created` outbox row; the debit command is enqueued by the saga runner right after. Same key + same body returns the same `transfer_id`; different body returns 422. It returns `202 {transfer_id}`.
 4. The outbox relay publishes the command to `accounts.commands`, keyed by `saga_id` (= `transfer_id`).
-5. Transfers orchestrates the saga asynchronously: accounts consumes each command, dedupes by `idempotency_key`, applies it through the ledger, publishes the reply to `accounts.replies`, and only then acks the command. The reply consumer advances the saga (state in `sagas`, append-only history in `saga_steps`; mirrored as `PENDING -> DEBITED -> DONE | FAILED | REVERSED`; resumable after a crash). Steps: `debit` (customer to `bank:transit:<CUR>`; the ledger enforces overdraft), `credit` (transit to destination). Keys are `UUIDv5(saga_id, step)`. If the credit is rejected, `debit:undo` (key `UUIDv5(saga_id, "debit:undo")`) returns the funds.
+5. The saga library inside transfers drives the saga asynchronously: accounts consumes each command, dedupes by `idempotency_key`, applies it through the ledger, publishes the reply to `accounts.replies`, and only then acks the command. The reply consumer advances the saga (state in `sagas`, append-only history in `saga_steps`; mirrored as `PENDING -> DEBITED -> DONE | FAILED | REVERSED`; resumable after a crash). Steps: `debit` (customer to `bank:transit:<CUR>`; the ledger enforces overdraft), `credit` (transit to destination). Keys are `UUIDv5(saga_id, step)`. If the credit is rejected, `debit:undo` (key `UUIDv5(saga_id, "debit:undo")`) returns the funds.
 6. Each state change enqueues a `transfer.*` event. The client learns the result by polling `GET /transfers/{id}` or SSE `GET /transfers/{id}/events`; the UI shows "processing" until a final state.
 
 Trade-off: the client no longer gets an instant success or failure.
@@ -224,7 +224,7 @@ Prompt-injection notes
 
 ```
 mock-bank/
-  Cargo.toml              # workspace, members: common/*, services/*
+  Cargo.toml              # workspace, members: common/*, crates/*, services/*
   common/                 # one Rust library crate each
     money/                # Money, Currency
     errors/               # AppError, HTTP mapping
@@ -232,6 +232,8 @@ mock-bank/
     outbox/               # outbox enqueue and relay
     auth/                 # internal JWT claims
     telemetry/            # tracing, metrics, health helpers
+  crates/
+    saga/                 # reusable saga library (common/006-saga), linked by hosts such as transfers
   services/
     accounts/
     ledger/
@@ -262,7 +264,7 @@ Phase 1: core bank and events (specs: platform, common, accounts, ledger, transf
   - Overdraft is rejected: early with `422 insufficient_funds` when the accounts balance projection already shows too little (no transfer created), otherwise the transfer ends `FAILED` (`insufficient_funds`) at the ledger debit, which is authoritative (treasury excepted).
   - Account balances come from the accounts projection (`balance_minor` + `as_of`) and match the ledger once `ledger.postings.v1` lag is zero; replaying the topic rebuilds them. DB-level check shows all postings sum to zero and the transit balance is zero when idle.
   - Ledger rejects postings for unknown accounts with `409 account_not_ready` (retried by the saga), and cross-currency postings.
-  - Killing a transfers orchestrator pod mid-saga and restarting still ends the transfer in a final state with no duplicate postings; a rejected credit ends `REVERSED`.
+  - Killing a transfers pod mid-saga and restarting still ends the transfer in a final state with no duplicate postings; a rejected credit ends `REVERSED`.
   - Over the backlog or lag limit, `POST /transfers` returns `503`/`429` with `Retry-After`.
   - After wiping the ledger consumer state, replaying `accounts.events.v1` rebuilds `account_projection`.
   - Every posting appears on `ledger.postings.v1` and every transfer state change on `transfers.events.v1` (duplicates tolerated, none lost).

@@ -43,7 +43,7 @@ Own customers, accounts, payees and login sessions; publish account events; exec
 - `AccountClosed` payload `{account_id}`
 - Each change calls `outbox::enqueue(tx, ...)` inside the same transaction as the account change; the service runs `outbox::run_relay` (see `common/005-outbox`). No relay logic is defined here.
 
-**Saga commands** (consumer of `accounts.commands`, producer of `accounts.replies`; message formats in `common/006-saga`)
+**Saga commands** (consumer of `accounts.commands`, producer of `accounts.replies`; message formats in `transfers/001-service`)
 - Group `accounts-commands`; commands are keyed by `saga_id`. Command `{saga_id, step, cmd, account, amount, idempotency_key}` with `cmd` in `debit`, `credit`, `undo_debit`.
 - Dedupe by `idempotency_key`: the key and the stored reply are recorded with the command result. A seen key re-sends the stored reply and applies nothing again.
 - Otherwise, in order: call ledger `POST /postings` as `role = service` (debit: account to `bank:transit:<CUR>`; credit: transit to account; undo_debit: transit to the original account) using the command's `idempotency_key` as the posting key; record the result; publish the reply to `accounts.replies` (key = `saga_id`, payload `{saga_id, step, result, code}`, `result` `ok` or `failed`, `code` the business reason such as `insufficient_funds`, `account_closed`); then commit the command offset. The offset is committed only after the reply is published, so a crash redelivers the command and the dedupe makes it safe.
@@ -60,7 +60,7 @@ Own customers, accounts, payees and login sessions; publish account events; exec
 - Metrics: `accounts_balance_projection_lag_seconds` (now minus `occurred_at` of the last applied event), `consumer_lag{group="accounts-balances"}`, `events_dlq_total`. Alerts: projection lag above 30 s for 2 min (warn), above 5 min (page); consumer lag above 1000 for 2 min; any DLQ message on the topic.
 
 ## Dependencies
-- `ledger/001-service` (`ledger.postings.v1` payload, `POST /postings`), `common/006-saga` (command and reply messages), `accounts/002-schema`, `common/001-money-and-errors`, `common/002-auth-claims`, `common/003-telemetry`, `common/004-events-kafka`, `common/005-outbox`
+- `ledger/001-service` (`ledger.postings.v1` payload, `POST /postings`), `transfers/001-service` (command and reply messages), `accounts/002-schema`, `common/001-money-and-errors`, `common/002-auth-claims`, `common/003-telemetry`, `common/004-events-kafka`, `common/005-outbox`
 
 ## Acceptance criteria
 - [ ] Creating a customer stores an argon2 hash, never plaintext.
